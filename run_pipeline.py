@@ -2,10 +2,16 @@ import os
 import sys
 import time
 from datetime import datetime
+import logging
 
 # Import our modules
-from multi_pickle_processor import MultiPickleProcessor
+from multi_pickle_processor_updated import MultiPickleProcessor
 from main_script import train_model, test, cross_validate
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 def run_pipeline(mode='process_and_train'):
     """
@@ -18,30 +24,36 @@ def run_pipeline(mode='process_and_train'):
             - 'process_and_train': Process pickle files and train model
             - 'cross_validate': Process pickle files and run cross-validation
     """
-    print(f"Running pipeline in mode: {mode}")
+    logger.info(f"Running pipeline in mode: {mode}")
     
     # Configuration
     config = {
         # Data paths
         'pickle_dirs': {
-            'body': 'D:/pickle_dir',            # Body keypoints from OpenPose
-            'openpose': 'D:/pickle_files',      # Alternative OpenPose data format
-            'hand': 'D:/pickle_files_hand',     # Hand keypoints from MediaPipe
-            'object': 'D:/pickle_files_object'  # Object locations from TridentNet
+            'pickle_dir': 'D:/pickle_dir',            # Directory with segment files and therapist labels
+            'openpose': 'D:/pickle_files',            # Directory with body keypoint data
+            'hand': 'D:/pickle_files_hand',           # Directory with hand keypoint data
+            'object': 'D:/pickle_files_object'        # Directory with object location data
         },
-        'output_dir': 'D:/combined_segments',
-        'segment_db_filename': 'segment_database.pkl',
-        'therapist_labels_path': 'D:/pickle_dir/therapist_labels.csv',
-        'num_files_per_dir': 10,
+        'csv_dir': 'D:/files_database',                    # Directory with segment timing CSVs
+        'ipsi_contra_csv': 'D:/camera_mapping.csv',   # CSV mapping patient IDs to camera IDs
+        'output_dir': 'D:/Github/Gnn_transformer/combined_segments',         # Output directory for segment database
+        'segment_db_filename': 'segment_database.pkl',# Output filename for segment database
+        
+        # Video and segment parameters
+        'fps': 30,                                    # Frames per second of the original videos
+        'num_target_frames': 20,                      # Number of frames to extract per segment
+        
+        # Camera/view configuration
+        'view_type': 'top',                           # Main view type to use ('top' or 'ipsi')
         
         # Model parameters
         'model_output_dir': './output/gnn_transformer',
-        'view_type': 'top',  # 'top' or 'ipsilateral'
         'epochs': 30,
         'batch_size': 8,
         'lr': 1e-4,
         'weight_decay': 1e-5,
-        'seq_length': 32,
+        'seq_length': 20,                             # Set to match num_target_frames
         'gnn_hidden': 64,
         'gnn_out': 128,
         'transformer_heads': 4,
@@ -49,9 +61,7 @@ def run_pipeline(mode='process_and_train'):
         'dropout': 0.2,
         'seed': 42,
         'balance_classes': True,
-        'cross_val_folds': 5,
-        'include_hand': True,
-        'include_object': True
+        'cross_val_folds': 5
     }
     
     # Track execution time
@@ -73,29 +83,33 @@ def run_pipeline(mode='process_and_train'):
     
     # Process pickle files if needed
     if mode in ['process_only', 'process_and_train', 'cross_validate']:
-        print("\n" + "="*80)
-        print("STEP 1: Processing pickle files")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("STEP 1: Processing segment data and extracting keypoints")
+        logger.info("="*80)
         
         processor = MultiPickleProcessor(
             pickle_dirs=config['pickle_dirs'],
+            csv_dir=config['csv_dir'],
             output_dir=config['output_dir'],
-            num_files_per_dir=config['num_files_per_dir']
+            ipsi_contra_csv=config['ipsi_contra_csv'],
+            fps=config['fps']
         )
         
-        processor.process(
-            therapist_labels_path=config['therapist_labels_path'],
-            output_filename=config['segment_db_filename']
+        # Process all data and build segment database
+        segment_db_path = processor.process(
+            view_types=[config['view_type']],
+            output_filename=config['segment_db_filename'],
+            num_target_frames=config['num_target_frames']
         )
         
         process_time = time.time() - start_time
-        print(f"\nProcessing completed in {process_time:.2f} seconds")
+        logger.info(f"\nProcessing completed in {process_time:.2f} seconds")
     
     # Train model if needed
     if mode in ['train_only', 'process_and_train']:
-        print("\n" + "="*80)
-        print("STEP 2: Training GNN + Transformer model")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info("STEP 2: Training GNN + Transformer model")
+        logger.info("="*80)
         
         train_start_time = time.time()
         
@@ -114,19 +128,17 @@ def run_pipeline(mode='process_and_train'):
             transformer_layers=config['transformer_layers'],
             dropout=config['dropout'],
             seed=config['seed'],
-            balance_classes=config['balance_classes'],
-            include_hand=config['include_hand'],
-            include_object=config['include_object']
+            balance_classes=config['balance_classes']
         )
         
         train_time = time.time() - train_start_time
-        print(f"\nTraining completed in {train_time:.2f} seconds")
+        logger.info(f"\nTraining completed in {train_time:.2f} seconds")
     
     # Run cross-validation if needed
     if mode == 'cross_validate':
-        print("\n" + "="*80)
-        print(f"STEP 2: Running {config['cross_val_folds']}-fold cross-validation")
-        print("="*80)
+        logger.info("\n" + "="*80)
+        logger.info(f"STEP 2: Running {config['cross_val_folds']}-fold cross-validation")
+        logger.info("="*80)
         
         cv_start_time = time.time()
         
@@ -146,19 +158,17 @@ def run_pipeline(mode='process_and_train'):
             transformer_layers=config['transformer_layers'],
             dropout=config['dropout'],
             seed=config['seed'],
-            balance_classes=config['balance_classes'],
-            include_hand=config['include_hand'],
-            include_object=config['include_object']
+            balance_classes=config['balance_classes']
         )
         
         cv_time = time.time() - cv_start_time
-        print(f"\nCross-validation completed in {cv_time:.2f} seconds")
+        logger.info(f"\nCross-validation completed in {cv_time:.2f} seconds")
     
     # Print total execution time
     total_time = time.time() - start_time
-    print("\n" + "="*80)
-    print(f"Pipeline completed in {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
-    print("="*80)
+    logger.info("\n" + "="*80)
+    logger.info(f"Pipeline completed in {total_time:.2f} seconds ({total_time/60:.2f} minutes)")
+    logger.info("="*80)
     
     # Return paths to outputs
     return {
