@@ -17,7 +17,7 @@ class KeypointDataset(Dataset):
     def __init__(self, 
                 segment_data, 
                 view_type='top',
-                seq_length=32,
+                seq_length=20,
                 transform=None,
                 include_hand=True,
                 include_object=True):
@@ -83,8 +83,28 @@ class KeypointDataset(Dataset):
         # Get label
         label = segment['label']
         
+        # Determine which side is impaired based on video_id or another field
+        impaired_side = 'right'  # Default
+        
+        # Check video_id format: "patient_{patient_id}_task_{activity_id}_{camera_id}_seg_{segment_id}"
+        if 'video_id' in segment:
+            video_id = segment['video_id']
+            if 'right_Impaired' in video_id:
+                impaired_side = 'right'
+            elif 'left_Impaired' in video_id:
+                impaired_side = 'left'
+        
+        # Alternative check if camera_id is available
+        elif 'camera_id' in segment:
+            # Assuming right side is impaired for cam1 and left side for cam4
+            # These camera mappings should be adjusted based on your data
+            if segment['camera_id'] == 1:
+                impaired_side = 'right'
+            elif segment['camera_id'] == 4:
+                impaired_side = 'left'
+        
         # Convert to graph representation
-        graphs = self._create_graphs(body_keypoints, hand_keypoints, object_locations)
+        graphs = self._create_graphs(body_keypoints, hand_keypoints, object_locations, impaired_side)
         
         # Apply transform if provided
         if self.transform:
@@ -92,7 +112,7 @@ class KeypointDataset(Dataset):
         
         return graphs, label, segment_id
     
-    def _create_graphs(self, body_keypoints, hand_keypoints, object_locations):
+    def _create_graphs(self, body_keypoints, hand_keypoints, object_locations, impaired_side='right'):
         """
         Create graph representations for each frame
         
@@ -100,6 +120,7 @@ class KeypointDataset(Dataset):
             body_keypoints: Body keypoints data
             hand_keypoints: Hand keypoints data (optional)
             object_locations: Object locations data (optional)
+            impaired_side: Which side is impaired ('right' or 'left')
             
         Returns:
             List of PyTorch Geometric Data objects for each frame
@@ -134,90 +155,93 @@ class KeypointDataset(Dataset):
                     object_frame = np.array(object_locations[i])
             
             # Create graph for this frame
-            graph = self._create_frame_graph(body_frame, hand_frame, object_frame)
+            graph = self._create_frame_graph(body_frame, hand_frame, object_frame, impaired_side)
             graphs.append(graph)
         
         return graphs
     
-    def _create_frame_graph(self, body_keypoints, hand_keypoints, object_locations):
+    def _create_frame_graph(self, body_keypoints, hand_keypoints, object_locations, impaired_side='right'):
         """
-        Create a graph representation for a single frame
+        Create a graph representation for a single frame, focusing on key joints
         
         Args:
             body_keypoints: Body keypoints for this frame
             hand_keypoints: Hand keypoints for this frame (optional)
             object_locations: Object locations for this frame (optional)
+            impaired_side: Which side is impaired ('right' or 'left')
             
         Returns:
             PyTorch Geometric Data object
         """
-        # Body keypoint indices for edges (OpenPose format)
-        body_edges = [
-            # Torso
-            (0, 1), (1, 2), (2, 3), (3, 4),  # Neck to right arm
-            (1, 5), (5, 6), (6, 7),          # Neck to left arm
-            (1, 8), (8, 9), (9, 10),         # Neck to right hip
-            (1, 11), (11, 12), (12, 13),     # Neck to left hip
-            (0, 14), (14, 15), (15, 16),     # Head
-            (0, 17), (0, 18)                 # Ears
-        ]
+        # Define key body joint indices for OpenPose format
+        # OpenPose keypoint order:
+        # 0: Nose, 1: Neck, 2: RShoulder, 3: RElbow, 4: RWrist, 5: LShoulder, 6: LElbow, 7: LWrist
+        # 8: MidHip, 9-13: RHip-LAnkle, 14-18: REye-REar-LEar
         
-        # Hand keypoint indices for edges (MediaPipe format)
-        # Adjust based on the actual format
-        hand_edges = [
-            # Thumb
-            (0, 1), (1, 2), (2, 3), (3, 4),
-            # Index finger
-            (0, 5), (5, 6), (6, 7), (7, 8),
-            # Middle finger
-            (0, 9), (9, 10), (10, 11), (11, 12),
-            # Ring finger
-            (0, 13), (13, 14), (14, 15), (15, 16),
-            # Pinky
-            (0, 17), (17, 18), (18, 19), (19, 20)
-        ]
+        # Select the impaired side indices
+        if impaired_side == 'right':
+            # Right arm is impaired: Neck(1) -> RShoulder(2) -> RElbow(3) -> RWrist(4)
+            body_key_indices = [1, 2, 3, 4, 8]  # Neck, RShoulder, RElbow, RWrist, MidHip
+            body_wrist_index = 4  # Right wrist
+            body_edges = [(0, 1), (1, 2), (2, 3), (0, 4)]  # Neck-Shoulder-Elbow-Wrist, Neck-MidHip
+        else:
+            # Left arm is impaired: Neck(1) -> LShoulder(5) -> LElbow(6) -> LWrist(7)
+            body_key_indices = [1, 5, 6, 7, 8]  # Neck, LShoulder, LElbow, LWrist, MidHip
+            body_wrist_index = 7  # Left wrist
+            body_edges = [(0, 1), (1, 2), (2, 3), (0, 4)]  # Neck-Shoulder-Elbow-Wrist, Neck-MidHip
         
-        # Process body keypoints
+        # Define key hand joint indices for MediaPipe format
+        # MediaPipe hand landmark model has 21 points:
+        # 0: Wrist
+        # 4: Thumb tip, 8: Index tip, 12: Middle tip, 16: Ring tip, 20: Pinky tip
+        hand_key_indices = [0, 4, 8, 12, 16, 20]  # Wrist and fingertips
+        
+        # Create hand edges (connect wrist to each fingertip)
+        hand_edges = [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5)]  # Wrist-to-fingertips
+        
+        # Process keypoints
         x_list = []
         edge_index_list = []
         node_offset = 0
         
-        # Add body keypoints
+        # Add selected body keypoints
         if body_keypoints is not None and body_keypoints.size > 0:
+            # Extract only the key body joints
+            key_body_points = body_keypoints[body_key_indices]
+            
             # Convert to tensor
-            body_tensor = torch.tensor(body_keypoints, dtype=torch.float)
+            body_tensor = torch.tensor(key_body_points, dtype=torch.float)
             x_list.append(body_tensor)
             
             # Create body edges
-            for src, dst in body_edges:
-                if src < body_tensor.shape[0] and dst < body_tensor.shape[0]:
-                    edge_index_list.append((src + node_offset, dst + node_offset))
-                    edge_index_list.append((dst + node_offset, src + node_offset))  # Bidirectional
+            for i, (src, dst) in enumerate(body_edges):
+                edge_index_list.append((src, dst))
+                edge_index_list.append((dst, src))  # Bidirectional
             
             node_offset += body_tensor.shape[0]
         
-        # Add hand keypoints
+        # Add selected hand keypoints
         if hand_keypoints is not None and (isinstance(hand_keypoints, np.ndarray) and hand_keypoints.size > 0):
-            # Convert to tensor
-            hand_tensor = torch.tensor(hand_keypoints, dtype=torch.float)
-            x_list.append(hand_tensor)
-            
-            # Create hand edges
-            for src, dst in hand_edges:
-                if src < hand_tensor.shape[0] and dst < hand_tensor.shape[0]:
+            # Extract only the key hand joints (wrist and fingertips)
+            if hand_keypoints.shape[0] >= 21:  # Ensure we have enough keypoints
+                key_hand_points = hand_keypoints[hand_key_indices]
+                
+                # Convert to tensor
+                hand_tensor = torch.tensor(key_hand_points, dtype=torch.float)
+                x_list.append(hand_tensor)
+                
+                # Create hand edges
+                for src, dst in hand_edges:
                     edge_index_list.append((src + node_offset, dst + node_offset))
                     edge_index_list.append((dst + node_offset, src + node_offset))  # Bidirectional
-            
-            # Connect wrist to body if both are present
-            if body_keypoints is not None and body_keypoints.size > 0:
-                # Connect hand wrist to body wrist (adjust indices as needed)
-                body_wrist_indices = [4, 7]  # Right and left wrist in OpenPose
-                for body_wrist in body_wrist_indices:
-                    if body_wrist < body_keypoints.shape[0]:
-                        edge_index_list.append((body_wrist, node_offset))  # Body wrist to hand wrist
-                        edge_index_list.append((node_offset, body_wrist))  # Hand wrist to body wrist
-            
-            node_offset += hand_tensor.shape[0]
+                
+                # Connect body wrist to hand wrist if both are present
+                if body_keypoints is not None and body_keypoints.size > 0:
+                    # Add bidirectional edge between body wrist and hand wrist
+                    edge_index_list.append((body_key_indices.index(body_wrist_index), node_offset))  # Body wrist to hand wrist
+                    edge_index_list.append((node_offset, body_key_indices.index(body_wrist_index)))  # Hand wrist to body wrist
+                
+                node_offset += hand_tensor.shape[0]
         
         # Add object locations
         if object_locations is not None and (isinstance(object_locations, np.ndarray) and object_locations.size > 0):
@@ -225,25 +249,21 @@ class KeypointDataset(Dataset):
             object_tensor = torch.tensor(object_locations, dtype=torch.float)
             x_list.append(object_tensor)
             
-            # Connect objects to hands and body (if present)
+            # Connect objects to key body and hand joints
             if body_keypoints is not None and body_keypoints.size > 0:
                 for i in range(object_tensor.shape[0]):
-                    # Connect to body keypoints (e.g., hands)
-                    body_interaction_indices = [4, 7]  # Right and left wrist in OpenPose
-                    for body_idx in body_interaction_indices:
-                        if body_idx < body_keypoints.shape[0]:
-                            edge_index_list.append((body_idx, node_offset + i))
-                            edge_index_list.append((node_offset + i, body_idx))
+                    # Connect to body wrist
+                    wrist_idx = body_key_indices.index(body_wrist_index)
+                    edge_index_list.append((wrist_idx, node_offset + i))
+                    edge_index_list.append((node_offset + i, wrist_idx))
             
             if hand_keypoints is not None and (isinstance(hand_keypoints, np.ndarray) and hand_keypoints.size > 0):
                 for i in range(object_tensor.shape[0]):
-                    # Connect to hand fingertips
-                    hand_interaction_indices = [4, 8, 12, 16, 20]  # Fingertips in MediaPipe
-                    hand_offset = body_keypoints.shape[0] if body_keypoints is not None else 0
-                    for hand_idx in hand_interaction_indices:
-                        if hand_idx < hand_keypoints.shape[0]:
-                            edge_index_list.append((hand_offset + hand_idx, node_offset + i))
-                            edge_index_list.append((node_offset + i, hand_offset + hand_idx))
+                    # Connect to hand fingertips (indices 1-5 in our reduced representation)
+                    for tip_idx in range(1, 6):  # Indices 1-5 are the fingertips in our reduced hand keypoints
+                        hand_offset = len(body_key_indices) if body_keypoints is not None else 0
+                        edge_index_list.append((hand_offset + tip_idx, node_offset + i))
+                        edge_index_list.append((node_offset + i, hand_offset + tip_idx))
         
         # Combine node features
         if x_list:
@@ -265,7 +285,7 @@ class KeypointDataset(Dataset):
         return graph
 
 
-def load_data(segment_db_path, view_type='top', seq_length=32, batch_size=8, 
+def load_data(segment_db_path, view_type='top', seq_length=20, batch_size=8, 
               include_hand=True, include_object=True, balance_classes=False,
               num_workers=4, test_size=0.2, val_size=0.1, random_state=42):
     """
