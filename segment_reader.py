@@ -43,7 +43,7 @@ def get_valid_rating(segment):
     
     return None
 
-def read_segment_information(pickle_dir, ipsi_contra_csv=None, camera_box='all'):
+def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
     """
     Read segment information and therapist labels from pickle files
     
@@ -53,7 +53,9 @@ def read_segment_information(pickle_dir, ipsi_contra_csv=None, camera_box='all')
         camera_box: Type of camera view to use ('bboxes_top', 'bboxes_ipsi', or 'all')
         
     Returns:
-        List of valid segments with labels
+        Tuple of (train_segments, inference_segments)
+        - train_segments: List of segments with consensus labels for training/validation
+        - inference_segments: List of segments with individual t1/t2 labels for inference
     """
     logger.info(f"Reading segment information from {pickle_dir}")
     
@@ -73,8 +75,9 @@ def read_segment_information(pickle_dir, ipsi_contra_csv=None, camera_box='all')
     r3_count = 0  # Ratings of 3 (maps to label 1)
     no_match_count = 0
     
-    # Collect valid segments
-    all_segments = []
+    # Collect valid segments for training/validation and inference
+    train_segments = []
+    inference_segments = []
     
     # Process each pickle file
     for pkl_file in tqdm(pickle_files, desc="Reading segment files"):
@@ -94,13 +97,13 @@ def read_segment_information(pickle_dir, ipsi_contra_csv=None, camera_box='all')
                     segment_camera_id = segment['CameraId']
                     
                     # Determine if this is the appropriate camera view
-                    if camera_box == 'bboxes_top' and segment_camera_id != 'cam3':
+                    if view_type == 'top' and segment_camera_id != 'cam3':
                         continue
-                    elif camera_box == 'bboxes_ipsi' and segment_camera_id == 'cam3':
+                    elif view_type == 'ipsi' and segment_camera_id == 'cam1':
                         continue
                     
                     # For ipsilateral view, check if this camera is the ipsilateral camera for the patient
-                    if camera_box == 'bboxes_ipsi':
+                    if view_type == 'ipsi':
                         ipsilateral_camera = patient_to_ipsilateral.get(patient_id)
                         if ipsilateral_camera != segment_camera_id:
                             continue
@@ -109,6 +112,37 @@ def read_segment_information(pickle_dir, ipsi_contra_csv=None, camera_box='all')
                     if 'segment_ratings' not in segment:
                         continue
                     
+                    # Extract individual ratings for inference segments
+                    t1_rating = segment['segment_ratings'].get('t1')
+                    t2_rating = segment['segment_ratings'].get('t2')
+                    
+                    # Convert individual ratings to binary labels for inference segments
+                    t1_label = None if t1_rating is None else (0 if t1_rating == 2 else 1)
+                    t2_label = None if t2_rating is None else (0 if t2_rating == 2 else 1)
+                    
+                    # Create video ID for the segment
+                    video_id = (f"patient_{segment['patient_id']}_task_{segment['activity_id']}_"
+                              f"{segment['CameraId']}_seg_{segment['segment_id']}")
+                    
+                    # Determine view type and impaired hand
+                    view_type = 'top' if segment_camera_id == 'cam3' else 'ipsi'
+                    impaired_hand = 1 if 'left_Impaired' in video_id else 0  # 0 for right, 1 for left
+                    
+                    # Add to inference_segments (with t1_label and t2_label)
+                    inference_segments.append({
+                        'frames': segment['frames'],
+                        'video_id': video_id,
+                        't1_label': t1_label,
+                        't2_label': t2_label,
+                        'camera_id': segment_camera_id,
+                        'view_type': view_type,
+                        'patient_id': patient_id,
+                        'activity_id': segment['activity_id'],
+                        'segment_id': segment['segment_id'],
+                        'impaired_hand': impaired_hand
+                    })
+                    
+                    # For training segments, we need a consensus label
                     rating = get_valid_rating(segment)
                     
                     # Skip segments with no rating or rating not in [2, 3]
@@ -135,15 +169,8 @@ def read_segment_information(pickle_dir, ipsi_contra_csv=None, camera_box='all')
                         logger.warning(f"Skipping segment in {pkl_file} with invalid rating: {rating}")
                         continue
                     
-                    # Create video ID for the segment
-                    video_id = (f"patient_{segment['patient_id']}_task_{segment['activity_id']}_"
-                              f"{segment['CameraId']}_seg_{segment['segment_id']}")
-                    
-                    # Determine view type
-                    view_type = 'top' if segment_camera_id == 'cam3' else 'ipsi'
-                    
-                    # Add to all_segments (for segments with matching ratings)
-                    all_segments.append({
+                    # Add to train_segments (for segments with matching ratings)
+                    train_segments.append({
                         'frames': segment['frames'],
                         'video_id': video_id,
                         'label': label,
@@ -151,13 +178,15 @@ def read_segment_information(pickle_dir, ipsi_contra_csv=None, camera_box='all')
                         'view_type': view_type,
                         'patient_id': patient_id,
                         'activity_id': segment['activity_id'],
-                        'segment_id': segment['segment_id']
+                        'segment_id': segment['segment_id'],
+                        'impaired_hand': impaired_hand
                     })
     
     # Log statistics
-    logger.info(f"Read {len(all_segments)} segments with valid therapist ratings")
+    logger.info(f"Read {len(train_segments)} segments with valid therapist ratings for training")
     logger.info(f"  Class 0 (rating 2): {r2_count} segments")
     logger.info(f"  Class 1 (rating 3): {r3_count} segments")
     logger.info(f"  No match: {no_match_count} segments")
+    logger.info(f"Read {len(inference_segments)} segments for inference")
     
-    return all_segments
+    return train_segments, inference_segments
