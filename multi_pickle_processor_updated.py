@@ -26,11 +26,12 @@ class MultiPickleProcessor:
                     'hand': 'D:/pickle_files_hand',         # Hand keypoints from MediaPipe
                     'object': 'D:/pickle_files_object'      # Object locations from TridentNet
                 },
-                csv_dir='D:/csv_files',                     # Directory with segment timing CSVs
-                output_dir='D:/combined_segments',
+                csv_dir='D:/files_database',                     # Directory with segment timing CSVs
+                output_dir='D:/Github/GNN_Transformer/combined_segments',
                 ipsi_contra_csv='D:/camera_mapping.csv',
                 num_files_per_dir=10,
-                fps=30):
+                fps=30,
+                view_type='top'):
         """
         Initialize the processor with pickle directories
         
@@ -48,6 +49,7 @@ class MultiPickleProcessor:
         self.ipsi_contra_csv = ipsi_contra_csv
         self.num_files_per_dir = num_files_per_dir
         self.fps = fps
+        self.view_type=view_type
         
         # Create output directory if it doesn't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -56,7 +58,8 @@ class MultiPickleProcessor:
         self.body_data = {}      # Patient ID -> activity ID -> keypoints
         self.hand_data = {}      # Patient ID -> activity ID -> keypoints
         self.object_data = {}    # Patient ID -> activity ID -> object locations
-        self.segment_data = {}   # Segment ID -> combined data
+        self.train_segment_data = {}   # Training segments (with consensus labels)
+        self.inference_segment_data = {}  # Inference segments (with individual t1/t2 labels)
         self.segment_records = None  # Segment timing records from CSV
     
     def load_segment_timing_info(self):
@@ -208,64 +211,58 @@ class MultiPickleProcessor:
             except Exception as e:
                 logger.error(f"Error loading {pkl_file}: {e}")
     
-    def load_therapist_ratings(self):
+    def load_segment_information(self):
         """
-        Load therapist ratings from pickle_dir
+        Load segment information with therapist labels from pickle_dir
         
         Returns:
-            Dictionary mapping (patient_id, activity_id, segment_id) to label
+            Tuple of (train_segments, inference_segments)
         """
         pickle_dir = self.pickle_dirs.get('pickle_dir')
         if not pickle_dir or not os.path.exists(pickle_dir):
             logger.error(f"Segment directory not found: {pickle_dir}")
-            return {}
+            return [], []
         
-        # Read segment information with therapist labels
-        all_segments = read_segment_information(
+        # Read segment information with the updated function that returns two sets
+        train_segments, inference_segments = read_segment_information(
             pickle_dir=pickle_dir,
+            view_type=self.view_type,
             ipsi_contra_csv=self.ipsi_contra_csv
         )
         
-        # Create mapping from (patient_id, activity_id, segment_id) to label
-        ratings = {}
-        for segment in all_segments:
-            key = (segment['patient_id'], segment['activity_id'], segment['segment_id'])
-            ratings[key] = segment['label']
-        
-        logger.info(f"Loaded therapist ratings for {len(ratings)} segments")
-        return ratings
+        logger.info(f"Loaded {len(train_segments)} training segments and {len(inference_segments)} inference segments")
+        return train_segments, inference_segments
     
-    def build_segment_database(self, view_types=['top', 'ipsi'], num_target_frames=20):
+    def build_segment_databases(self, view_types=['top', 'ipsi'], num_target_frames=20):
         """
-        Build segment database by combining segment timing, keypoint data, and therapist ratings
+        Build training and inference segment databases
         
         Args:
             view_types: List of view types to include ('top', 'ipsi', or both)
             num_target_frames: Number of frames to extract per segment
             
         Returns:
-            Dictionary with segments indexed by segment ID
+            Tuple of (train_segment_data, inference_segment_data)
         """
-        logger.info("Building segment database...")
+        logger.info("Building segment databases...")
         
         # Make sure segment records are loaded
         if self.segment_records is None:
             self.load_segment_timing_info()
         
-        # Load therapist ratings
-        therapist_ratings = self.load_therapist_ratings()
+        # Load segment information with therapist labels
+        train_segments, inference_segments = self.load_segment_information()
         
-        # Process body keypoints first
-        body_segments = build_segment_database(
+        # Process body segments for training and inference
+        train_body_segments = build_segment_database(
             self.segment_records, 
             self.body_data, 
             data_type='body',
             fps=self.fps, 
             num_target_frames=num_target_frames
-            
         )
         
-        # Process hand keypoints
+        # Hand and object data are the same for both training and inference
         hand_segments = {}
         if self.hand_data:
             hand_segments = build_segment_database(
@@ -274,10 +271,8 @@ class MultiPickleProcessor:
                 data_type='hand',
                 fps=self.fps, 
                 num_target_frames=num_target_frames
-                
             )
         
-        # Process object locations
         object_segments = {}
         if self.object_data:
             object_segments = build_segment_database(
@@ -286,11 +281,48 @@ class MultiPickleProcessor:
                 data_type='object',
                 fps=self.fps, 
                 num_target_frames=num_target_frames
-                
             )
         
-        # Combine all data into final segments
+        # Build training segment database
+        self._build_training_segments(
+            train_segments, 
+            train_body_segments, 
+            hand_segments, 
+            object_segments, 
+            view_types
+        )
+        
+        # Build inference segment database
+        self._build_inference_segments(
+            inference_segments, 
+            train_body_segments,  # Use the same body segments for both
+            hand_segments, 
+            object_segments, 
+            view_types
+        )
+        
+        return self.train_segment_data, self.inference_segment_data
+    
+    def _build_training_segments(self, train_segments, body_segments, hand_segments, object_segments, view_types):
+        """
+        Build training segment database with consensus labels
+        
+        Args:
+            train_segments: List of training segments with consensus labels
+            body_segments: Dictionary of body keypoints by segment key
+            hand_segments: Dictionary of hand keypoints by segment key
+            object_segments: Dictionary of object locations by segment key
+            view_types: List of view types to include
+        """
         segment_id = 0
+        
+        # Create a mapping from (patient_id, activity_id, segment_id) to label
+        label_map = {}
+        for segment in train_segments:
+            key = (segment['patient_id'], segment['activity_id'], segment['segment_id'])
+            label_map[key] = segment['label']
+        
+        # Process each body segment
         for key, segment in body_segments.items():
             patient_id = segment['patient_id']
             activity_id = segment['activity_id']
@@ -301,9 +333,9 @@ class MultiPickleProcessor:
             if view_types and view_type not in view_types:
                 continue
             
-            # Get therapist rating
+            # Get label from mapping
             rating_key = (patient_id, activity_id, seg_id)
-            label = therapist_ratings.get(rating_key)
+            label = label_map.get(rating_key)
             
             # Skip if no rating
             if label is None:
@@ -320,7 +352,7 @@ class MultiPickleProcessor:
                 object_locations = object_segments[key]['keypoints']
             
             # Create combined segment
-            self.segment_data[segment_id] = {
+            self.train_segment_data[segment_id] = {
                 'patient_id': patient_id,
                 'activity_id': activity_id,
                 'segment_id': seg_id,
@@ -331,42 +363,130 @@ class MultiPickleProcessor:
                 'body_keypoints': segment['keypoints'],
                 'hand_keypoints': hand_keypoints,
                 'object_locations': object_locations,
-                'label': label
+                'label': label,
+                'impaired_hand': segment['impaired_hand']
             }
             
             segment_id += 1
         
-        logger.info(f"Built {len(self.segment_data)} segments with keypoint data and therapist ratings")
-        
-        return self.segment_data
+        logger.info(f"Built {len(self.train_segment_data)} training segments with consensus labels")
     
-    def save_segment_database(self, filename='segment_database.pkl'):
+    def _build_inference_segments(self, inference_segments, body_segments, hand_segments, object_segments, view_types):
         """
-        Save the segment database
+        Build inference segment database with individual t1/t2 labels
+        
+        Args:
+            inference_segments: List of inference segments with t1/t2 labels
+            body_segments: Dictionary of body keypoints by segment key
+            hand_segments: Dictionary of hand keypoints by segment key
+            object_segments: Dictionary of object locations by segment key
+            view_types: List of view types to include
         """
-        output_path = os.path.join(self.output_dir, filename)
-        logger.info(f"Saving segment database to {output_path}...")
+        segment_id = 0
         
-        with open(output_path, 'wb') as f:
-            pickle.dump(self.segment_data, f)
+        # Create mappings from (patient_id, activity_id, segment_id) to t1_label and t2_label
+        t1_label_map = {}
+        t2_label_map = {}
+        for segment in inference_segments:
+            key = (segment['patient_id'], segment['activity_id'], segment['segment_id'])
+            t1_label_map[key] = segment['t1_label']
+            t2_label_map[key] = segment['t2_label']
         
-        logger.info(f"Saved {len(self.segment_data)} segments")
+        # Process each body segment
+        for key, segment in body_segments.items():
+            patient_id = segment['patient_id']
+            activity_id = segment['activity_id']
+            seg_id = segment['segment_id']
+            view_type = segment['view_type']
+            
+            # Skip if view type not requested
+            if view_types and view_type not in view_types:
+                continue
+            
+            # Get t1 and t2 labels from mappings
+            rating_key = (patient_id, activity_id, seg_id)
+            t1_label = t1_label_map.get(rating_key)
+            t2_label = t2_label_map.get(rating_key)
+            
+            # Skip if no ratings at all
+            if t1_label is None and t2_label is None:
+                continue
+            
+            # Get hand keypoints if available
+            hand_keypoints = None
+            if hand_segments and key in hand_segments:
+                hand_keypoints = hand_segments[key]['keypoints']
+            
+            # Get object locations if available
+            object_locations = None
+            if object_segments and key in object_segments:
+                object_locations = object_segments[key]['keypoints']
+            
+            # Create combined segment
+            self.inference_segment_data[segment_id] = {
+                'patient_id': patient_id,
+                'activity_id': activity_id,
+                'segment_id': seg_id,
+                'camera_id': segment['camera_id'],
+                'view_type': view_type,
+                'start_time': segment['start_time'],
+                'end_time': segment['end_time'],
+                'body_keypoints': segment['keypoints'],
+                'hand_keypoints': hand_keypoints,
+                'object_locations': object_locations,
+                't1_label': t1_label,
+                't2_label': t2_label,
+                'impaired_hand': segment['impaired_hand']
+            }
+            
+            segment_id += 1
+        
+        logger.info(f"Built {len(self.inference_segment_data)} inference segments with t1/t2 labels")
     
-    def process(self, view_types=['top', 'ipsi'], output_filename='segment_database.pkl', num_target_frames=20):
+    def save_segment_databases(self, train_filename='train_segment_database.pkl', 
+                              inference_filename='inference_segment_database.pkl'):
+        """
+        Save the segment databases
+        
+        Args:
+            train_filename: Filename for training segment database
+            inference_filename: Filename for inference segment database
+        """
+        # Save training segment database
+        train_output_path = os.path.join(self.output_dir, train_filename)
+        logger.info(f"Saving training segment database to {train_output_path}...")
+        
+        with open(train_output_path, 'wb') as f:
+            pickle.dump(self.train_segment_data, f)
+        
+        logger.info(f"Saved {len(self.train_segment_data)} training segments")
+        
+        # Save inference segment database
+        inference_output_path = os.path.join(self.output_dir, inference_filename)
+        logger.info(f"Saving inference segment database to {inference_output_path}...")
+        
+        with open(inference_output_path, 'wb') as f:
+            pickle.dump(self.inference_segment_data, f)
+        
+        logger.info(f"Saved {len(self.inference_segment_data)} inference segments")
+    
+    def process(self, view_types=['top', 'ipsi'], num_target_frames=20):
         """
         Run the full processing pipeline
         
         Args:
             view_types: List of view types to include ('top', 'ipsi', or both)
-            output_filename: Filename for the output segment database
             num_target_frames: Number of frames to extract per segment
             
         Returns:
-            Path to saved segment database
+            Dictionary with paths to saved segment databases
         """
         self.load_segment_timing_info()
         self.load_pickle_files()
-        self.build_segment_database(view_types, num_target_frames)
-        self.save_segment_database(output_filename)
+        self.build_segment_databases(view_types, num_target_frames)
+        self.save_segment_databases()
         
-        return os.path.join(self.output_dir, output_filename)
+        return {
+            'train_segment_db_path': os.path.join(self.output_dir, 'train_segment_database.pkl'),
+            'inference_segment_db_path': os.path.join(self.output_dir, 'inference_segment_database.pkl')
+        }
