@@ -7,7 +7,9 @@ from torch_geometric.data import Data
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
-
+import matplotlib.pyplot as plt
+import networkx as nx
+from torch_geometric.utils import to_networkx
 
 class KeypointDataset(Dataset):
     """
@@ -16,7 +18,7 @@ class KeypointDataset(Dataset):
     
     def __init__(self, 
                 segment_data, 
-                view_type='top',
+                view_type,
                 seq_length=20,
                 transform=None,
                 include_hand=True,
@@ -79,30 +81,11 @@ class KeypointDataset(Dataset):
         object_locations = None
         if self.include_object and segment['object_locations'] is not None:
             object_locations = segment['object_locations']
-        
         # Get label
         label = segment['label']
-        
+
         # Determine which side is impaired based on video_id or another field
-        impaired_side = 'right'  # Default
-        
-        # Check video_id format: "patient_{patient_id}_task_{activity_id}_{camera_id}_seg_{segment_id}"
-        if 'video_id' in segment:
-            video_id = segment['video_id']
-            if 'right_Impaired' in video_id:
-                impaired_side = 'right'
-            elif 'left_Impaired' in video_id:
-                impaired_side = 'left'
-        
-        # Alternative check if camera_id is available
-        elif 'camera_id' in segment:
-            # Assuming right side is impaired for cam1 and left side for cam4
-            # These camera mappings should be adjusted based on your data
-            if segment['camera_id'] == 1:
-                impaired_side = 'right'
-            elif segment['camera_id'] == 4:
-                impaired_side = 'left'
-        
+        impaired_side = segment['impaired_hand']  # Default   
         # Convert to graph representation
         graphs = self._create_graphs(body_keypoints, hand_keypoints, object_locations, impaired_side)
         
@@ -281,11 +264,69 @@ class KeypointDataset(Dataset):
         
         # Create PyTorch Geometric Data object
         graph = Data(x=x, edge_index=edge_index)
+
         
+
+
+        #########visualize part########################
+        
+        # # Convert to networkx graph for visualization
+        # G = to_networkx(graph, to_undirected=True)
+        
+        # # Get node positions from x coordinates
+        # # Adjust for OpenPose coordinate system (flip y-axis since 0,0 is top-left)
+        # pos = {i: (float(graph.x[i][0]), -float(graph.x[i][1])) for i in range(graph.x.shape[0])}
+        
+        # # Create figure
+        # plt.figure(figsize=(10, 8))
+        
+        # # Define node colors based on type
+        # body_nodes = list(range(len(body_key_indices))) if body_keypoints is not None else []
+        # hand_nodes = list(range(len(body_key_indices), len(body_key_indices) + len(hand_key_indices))) if hand_keypoints is not None else []
+        # object_nodes = list(range(node_offset, node_offset + len(object_locations))) if object_locations is not None else []
+        
+        # # Draw nodes
+        # nx.draw_networkx_nodes(G, pos, nodelist=body_nodes, node_color='blue', node_size=100, label='Body')
+        # nx.draw_networkx_nodes(G, pos, nodelist=hand_nodes, node_color='green', node_size=80, label='Hand')
+        # nx.draw_networkx_nodes(G, pos, nodelist=object_nodes, node_color='red', node_size=120, label='Object')
+        
+        # # Draw edges
+        # nx.draw_networkx_edges(G, pos, width=1.0, alpha=0.7)
+        
+        # # Add labels with proper anatomical terms
+        # if impaired_side == 'right':
+        #     body_labels = {i: ['Neck', 'RShoulder', 'RElbow', 'RWrist', 'MidHip'][i] for i in body_nodes}
+        # else:
+        #     body_labels = {i: ['Neck', 'LShoulder', 'LElbow', 'LWrist', 'MidHip'][i] for i in body_nodes}
+            
+        # hand_labels = {i: ['Wrist', 'Thumb', 'Index', 'Middle', 'Ring', 'Pinky'][i-len(body_key_indices)] for i in hand_nodes}
+        # object_labels = {i: f'Obj{i-node_offset}' for i in object_nodes}
+        
+        # # Combine all labels
+        # node_labels = {**body_labels, **hand_labels, **object_labels}
+        
+        # # Draw labels
+        # nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=8)
+        
+        # # Add title with view information
+        # plt.title(f'Keypoint Graph - {impaired_side.capitalize()} Side Impaired (Ipsilateral Camera View)')
+        # plt.legend(loc='upper right')
+        
+        # # Remove axis ticks to match your example
+        # plt.axis('off')
+        
+        # # Add perspective indicator
+        # if impaired_side == 'left':
+        #     plt.figtext(0.02, 0.02, "Camera viewing from patient's left side", fontsize=8)
+        # else:
+        #     plt.figtext(0.02, 0.02, "Camera viewing from patient's right side", fontsize=8)
+        
+        # plt.show()
+    
         return graph
 
 
-def load_data(segment_db_path, view_type='top', seq_length=20, batch_size=8, 
+def load_data(segment_db_path, view_type, seq_length=20, batch_size=8, 
               include_hand=True, include_object=True, balance_classes=False,
               num_workers=4, test_size=0.2, val_size=0.1, random_state=42):
     """
