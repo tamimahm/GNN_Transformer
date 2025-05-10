@@ -86,7 +86,6 @@ def extract_segment_frames(keypoints_array, fps, start_time, end_time, num_targe
     
     # Ensure we don't exceed array bounds
     total_keypoint_frames = keypoints_array.shape[2]
-    start_frame = min(start_frame, 0)
     # If end_frame exceeds total frames, adjust it
     if end_frame > total_keypoint_frames:
         end_frame = total_keypoint_frames        
@@ -177,14 +176,13 @@ def build_segment_database(records, keypoints_data, data_type,fps=30, num_target
         activity_id = record['activity_id']
         camera_id = record['CameraId']
         hand_id=record['FileName'].split('_')[2]
-        if (hand_id=='left' and camera_id=='4') or (hand_id=='right' and camera_id=='1'):
+        if (hand_id=='left' and camera_id==4) or (hand_id=='right' and camera_id==1):
             view_type='ipsi'
         elif camera_id==3:
             view_type='top'
         else:
             view_type='contra'
-            continue
-            
+            continue  
         if data_type=='object':
             # Skip if no keypoints data for this patient/activity
             if (patient_id not in keypoints_data or 
@@ -228,7 +226,8 @@ def build_segment_database(records, keypoints_data, data_type,fps=30, num_target
                     'view_type': view_type,
                     'start_time': start_time,
                     'end_time': end_time,
-                    'keypoints': normalized_frames
+                    'keypoints': normalized_frames,
+                    'impaired_hand': hand_id
                 }
                 
                 segment_id += 1
