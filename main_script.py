@@ -446,10 +446,10 @@ def cross_validate(segment_db_path, view_type, output_dir, num_folds=5, **kwargs
     return avg_accuracy, avg_f1, cv_results
 
 
-def train_model(segment_db_path, output_dir, view_type='top', epochs=30, batch_size=8, 
+def train_model(segment_db_path, output_dir, view_type, epochs=30, batch_size=8, 
                 lr=1e-4, weight_decay=1e-5, seq_length=32, gnn_hidden=64, gnn_out=128,
                 transformer_heads=4, transformer_layers=4, dropout=0.2, seed=42,
-                balance_classes=False, num_workers=4, include_hand=True, include_object=True,
+                balance_classes=True, num_workers=4, include_hand=False, include_object=False,
                 checkpoint=None, test_segment_ids=None, is_cross_val_fold=False):
     """
     Train the GNN + Transformer model
