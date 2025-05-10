@@ -3,10 +3,11 @@ import sys
 import time
 from datetime import datetime
 import logging
-
+import multiprocessing
 # Import our modules
 from multi_pickle_processor_updated import MultiPickleProcessor
 from main_script import train_model, test, cross_validate
+from graph_visualization import visualize_segment_graphs
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
@@ -20,9 +21,12 @@ def run_pipeline(mode='process_and_train'):
     Args:
         mode: Operation mode
             - 'process_only': Only process pickle files and create segment database
+            - 'visualize_only': Only visualize graphs from segment database
             - 'train_only': Only train model using existing segment database
             - 'process_and_train': Process pickle files and train model
+            - 'process_visualize_train': Process, visualize and train
             - 'cross_validate': Process pickle files and run cross-validation
+            - 'inference': Process and prepare for inference
     """
     logger.info(f"Running pipeline in mode: {mode}")
     
@@ -35,22 +39,25 @@ def run_pipeline(mode='process_and_train'):
             'hand': 'D:/pickle_files_hand',           # Directory with hand keypoint data
             'object': 'D:/pickle_files_object'        # Directory with object location data
         },
-        'csv_dir': 'D:/files_database',                    # Directory with segment timing CSVs
-        'ipsi_contra_csv': 'D:/camera_mapping.csv',   # CSV mapping patient IDs to camera IDs
-        'output_dir': 'D:/Github/Gnn_transformer/combined_segments',         # Output directory for segment database
-        'segment_db_filename': 'segment_database.pkl',# Output filename for segment database
+        'ipsi_contra_csv': 'D:/Github/Multi_view-automatic-assessment/camera_assignments.csv',   # CSV mapping patient IDs to camera IDs
+        'output_dir': 'D:/Github/GNN_Transformer/combined_segments',         # Output directory for segment database
+        'train_db_filename': 'train_segment_database.pkl',  # Output filename for training database
+        'inference_db_filename': 'inference_segment_database.pkl',  # Output filename for inference database
         
         # Video and segment parameters
         'fps': 30,                                    # Frames per second of the original videos
-        'num_target_frames': 20,                      # Number of frames to extract per segment
+        
+        # Visualization parameters
+        'visualize_num_samples': 20,                  # Number of samples to visualize
+        'visualize_random_seed': 42,                  # Random seed for visualization sampling
         
         # Camera/view configuration
-        'view_type': 'top',                           # Main view type to use ('top' or 'ipsi')
+        'view_type': 'ipsi',                          # Main view type to use ('top' or 'ipsi')
         
         # Model parameters
         'model_output_dir': './output/gnn_transformer',
         'epochs': 30,
-        'batch_size': 8,
+        'batch_size': 16,
         'lr': 1e-4,
         'weight_decay': 1e-5,
         'seq_length': 20,                             # Set to match num_target_frames
@@ -61,60 +68,100 @@ def run_pipeline(mode='process_and_train'):
         'dropout': 0.2,
         'seed': 42,
         'balance_classes': True,
-        'cross_val_folds': 5
+        'cross_val_folds': 5,
+        'include_hand':False,
+        'include_object':False,
+        'num_workers': multiprocessing.cpu_count(),  # Use all available cores
     }
     
     # Track execution time
     start_time = time.time()
     
-    # Create timestamp for output directory
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Update output directories with timestamp
-    config['output_dir'] = f"{config['output_dir']}_{timestamp}"
-    config['model_output_dir'] = f"{config['model_output_dir']}_{timestamp}"
+    # Keep the base directory consistent (no timestamp)
+    os.makedirs(config['output_dir'], exist_ok=True)
+    os.makedirs(config['model_output_dir'], exist_ok=True)
+
+    # Update database filenames to include timestamp
+    config['train_db_filename'] = f"train_segment_database.pkl"
+    config['inference_db_filename'] = f"inference_segment_database.pkl"
     
     # Create output directories
     os.makedirs(config['output_dir'], exist_ok=True)
     os.makedirs(config['model_output_dir'], exist_ok=True)
     
-    # Full path to segment database
-    segment_db_path = os.path.join(config['output_dir'], config['segment_db_filename'])
+    # Full paths to segment databases
+    train_db_path = os.path.join(config['output_dir'], config['train_db_filename'])
+    inference_db_path = os.path.join(config['output_dir'], config['inference_db_filename'])
     
     # Process pickle files if needed
-    if mode in ['process_only', 'process_and_train', 'cross_validate']:
+    if mode in ['process_only', 'process_and_train', 'process_visualize_train', 'cross_validate', 'inference']:
         logger.info("\n" + "="*80)
         logger.info("STEP 1: Processing segment data and extracting keypoints")
         logger.info("="*80)
         
         processor = MultiPickleProcessor(
             pickle_dirs=config['pickle_dirs'],
-            csv_dir=config['csv_dir'],
             output_dir=config['output_dir'],
             ipsi_contra_csv=config['ipsi_contra_csv'],
-            fps=config['fps']
+            fps=config['fps'],
+            view_type=config['view_type']  # Add this parameter
         )
         
-        # Process all data and build segment database
-        segment_db_path = processor.process(
-            view_types=[config['view_type']],
-            output_filename=config['segment_db_filename'],
-            num_target_frames=config['num_target_frames']
-        )
+        # Process data and build segment databases
+        db_paths = processor.process(view_types=[config['view_type']])
+        train_db_path = db_paths['train_segment_db_path']
+        inference_db_path = db_paths['inference_segment_db_path']
         
         process_time = time.time() - start_time
         logger.info(f"\nProcessing completed in {process_time:.2f} seconds")
     
-    # Train model if needed
-    if mode in ['train_only', 'process_and_train']:
+    # Visualize graphs if needed
+    if mode in ['visualize_only', 'process_visualize_train']:
         logger.info("\n" + "="*80)
-        logger.info("STEP 2: Training GNN + Transformer model")
+        logger.info("STEP 2: Visualizing keypoint graphs")
+        logger.info("="*80)
+        
+        vis_start_time = time.time()
+        
+        # Visualize training segments
+        vis_dir_train = visualize_segment_graphs(
+            segment_db_path=train_db_path,
+            output_dir=os.path.join(config['model_output_dir'], 'train_visualizations'),
+            view_type=config['view_type'],
+            num_samples=config['visualize_num_samples'],
+            random_seed=config['visualize_random_seed']
+        )
+        
+        logger.info(f"Training graph visualizations saved to {vis_dir_train}")
+        
+        # Visualize inference segments
+        if os.path.exists(inference_db_path):
+            vis_dir_inference = visualize_segment_graphs(
+                segment_db_path=inference_db_path,
+                output_dir=os.path.join(config['model_output_dir'], 'inference_visualizations'),
+                view_type=config['view_type'],
+                num_samples=config['visualize_num_samples'],
+                random_seed=config['visualize_random_seed']
+            )
+            
+            logger.info(f"Inference graph visualizations saved to {vis_dir_inference}")
+        
+        vis_time = time.time() - vis_start_time
+        logger.info(f"\nVisualization completed in {vis_time:.2f} seconds")
+    
+    # Train model if needed
+    if mode in ['train_only', 'process_and_train', 'process_visualize_train']:
+        step_num = 2 if mode != 'process_visualize_train' else 3
+        logger.info("\n" + "="*80)
+        logger.info(f"STEP {step_num}: Training GNN + Transformer model")
         logger.info("="*80)
         
         train_start_time = time.time()
-        
+
         train_model(
-            segment_db_path=segment_db_path,
+            segment_db_path=train_db_path,  # Use training segment database
             output_dir=config['model_output_dir'],
             view_type=config['view_type'],
             epochs=config['epochs'],
@@ -128,7 +175,10 @@ def run_pipeline(mode='process_and_train'):
             transformer_layers=config['transformer_layers'],
             dropout=config['dropout'],
             seed=config['seed'],
-            balance_classes=config['balance_classes']
+            balance_classes=config['balance_classes'],
+            include_hand=config['include_hand'], 
+            include_object=config['include_object'],
+            num_workers=config['num_workers']  # Add this parameter
         )
         
         train_time = time.time() - train_start_time
@@ -143,7 +193,7 @@ def run_pipeline(mode='process_and_train'):
         cv_start_time = time.time()
         
         cross_validate(
-            segment_db_path=segment_db_path,
+            segment_db_path=train_db_path,  # Use training segment database
             view_type=config['view_type'],
             output_dir=config['model_output_dir'],
             num_folds=config['cross_val_folds'],
@@ -164,6 +214,22 @@ def run_pipeline(mode='process_and_train'):
         cv_time = time.time() - cv_start_time
         logger.info(f"\nCross-validation completed in {cv_time:.2f} seconds")
     
+    # Run inference if needed
+    if mode == 'inference':
+        logger.info("\n" + "="*80)
+        logger.info("STEP 2: Running inference with pre-trained model")
+        logger.info("="*80)
+        
+        inference_start_time = time.time()
+        
+        # Note: You would need to implement an inference function that can handle
+        # the inference segment database with t1_label and t2_label
+        # This is a placeholder for now
+        logger.info("Inference functionality to be implemented")
+        
+        inference_time = time.time() - inference_start_time
+        logger.info(f"\nInference completed in {inference_time:.2f} seconds")
+    
     # Print total execution time
     total_time = time.time() - start_time
     logger.info("\n" + "="*80)
@@ -172,20 +238,30 @@ def run_pipeline(mode='process_and_train'):
     
     # Return paths to outputs
     return {
-        'segment_db_path': segment_db_path,
+        'train_segment_db_path': train_db_path,
+        'inference_segment_db_path': inference_db_path,
         'model_output_dir': config['model_output_dir']
     }
 
 
 if __name__ == "__main__":
     # Parse command line argument
-    mode = 'process_and_train'  # Default mode
+    mode = 'train_only'  # Default mode - now includes visualization step
     
     if len(sys.argv) > 1:
         mode = sys.argv[1]
-        if mode not in ['process_only', 'train_only', 'process_and_train', 'cross_validate']:
+        valid_modes = [
+            'process_only', 
+            'visualize_only', 
+            'train_only', 
+            'process_and_train', 
+            'process_visualize_train', 
+            'cross_validate', 
+            'inference'
+        ]
+        if mode not in valid_modes:
             print(f"Invalid mode: {mode}")
-            print("Available modes: process_only, train_only, process_and_train, cross_validate")
+            print(f"Available modes: {', '.join(valid_modes)}")
             sys.exit(1)
     
     # Run pipeline
