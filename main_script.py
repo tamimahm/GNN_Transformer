@@ -39,13 +39,21 @@ def train_epoch(model, train_loader, criterion, optimizer, device):
     # Progress bar
     pbar = tqdm(train_loader, desc="Training")
     
-    for graphs, labels, segment_ids, seq_lengths in pbar:
+    for batch_data in pbar:
+        if len(batch_data) == 5:  # New format with raw keypoints
+            graphs, raw_keypoints, labels, segment_ids, seq_lengths = batch_data
+            # Move raw keypoints to device
+            raw_keypoints = raw_keypoints.to(device)
+        else:  # Old format without raw keypoints
+            graphs, labels, segment_ids, seq_lengths = batch_data
+            raw_keypoints = None
+        
         # Move data to device
         labels = labels.to(device)
         graphs = [[g.to(device) for g in seq] for seq in graphs]
         
         # Forward pass
-        outputs = model(graphs, seq_lengths)
+        outputs = model(graphs, seq_lengths=seq_lengths, raw_keypoints=raw_keypoints)
         loss = criterion(outputs, labels)
         
         # Backward pass and optimize
@@ -82,7 +90,7 @@ def validate(model, val_loader, criterion, device):
         device: Device to use
         
     Returns:
-        Validation loss, accuracy, and predictions
+        Validation loss, accuracy, f1 score, and predictions
     """
     model.eval()
     total_loss = 0
@@ -90,13 +98,21 @@ def validate(model, val_loader, criterion, device):
     all_predictions = []
     
     with torch.no_grad():
-        for graphs, labels, segment_ids, seq_lengths in val_loader:
+        for batch_data in val_loader:
+            if len(batch_data) == 5:  # New format with raw keypoints
+                graphs, raw_keypoints, labels, segment_ids, seq_lengths = batch_data
+                # Move raw keypoints to device
+                raw_keypoints = raw_keypoints.to(device)
+            else:  # Old format without raw keypoints
+                graphs, labels, segment_ids, seq_lengths = batch_data
+                raw_keypoints = None
+            
             # Move data to device
             labels = labels.to(device)
             graphs = [[g.to(device) for g in seq] for seq in graphs]
             
             # Forward pass
-            outputs = model(graphs, seq_lengths)
+            outputs = model(graphs, raw_keypoints=raw_keypoints, seq_lengths=seq_lengths)
             loss = criterion(outputs, labels)
             
             # Statistics
@@ -113,7 +129,6 @@ def validate(model, val_loader, criterion, device):
     avg_loss = total_loss / len(val_loader)
     
     return avg_loss, accuracy, f1, all_labels, all_predictions
-
 
 def test(model, test_loader, criterion, device, output_dir):
     """
