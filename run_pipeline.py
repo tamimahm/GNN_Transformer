@@ -49,7 +49,7 @@ def run_pipeline(mode='process_and_train'):
         
         # Visualization parameters
         'visualize_num_samples': 20,                  # Number of samples to visualize
-        'visualize_random_seed': 42,                  # Random seed for visualization sampling
+        'visualize_random_seed': 1206177,                  # Random seed for visualization sampling
         
         # Camera/view configuration
         'view_type': 'ipsi',                          # Main view type to use ('top' or 'ipsi')
@@ -57,8 +57,8 @@ def run_pipeline(mode='process_and_train'):
         # Model parameters
         'model_output_dir': './output/gnn_transformer',
         'epochs': 30,
-        'batch_size': 16,
-        'lr': 1e-4,
+        'batch_size': 8,
+        'lr': 1e-3,
         'weight_decay': 1e-5,
         'seq_length': 20,                             # Set to match num_target_frames
         'gnn_hidden': 64,
@@ -66,7 +66,7 @@ def run_pipeline(mode='process_and_train'):
         'transformer_heads': 4,
         'transformer_layers': 4,
         'dropout': 0.2,
-        'seed': 42,
+        'seed': 1206177,
         'balance_classes': True,
         'cross_val_folds': 5,
         'include_hand':False,
@@ -246,7 +246,7 @@ def run_pipeline(mode='process_and_train'):
 
 if __name__ == "__main__":
     # Parse command line argument
-    mode = 'train_only'  # Default mode - now includes visualization step
+    mode = 'process_and_train'  # Default mode - now includes visualization step
     
     if len(sys.argv) > 1:
         mode = sys.argv[1]
