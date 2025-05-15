@@ -13,7 +13,8 @@ from torch_geometric.utils import to_networkx
 
 class KeypointDataset(Dataset):
     """
-    Dataset for keypoint-based data from multiple modalities
+    Dataset for keypoint-based data from multiple modalities,
+    providing both graph representations and raw keypoints
     """
     
     def __init__(self, 
@@ -61,8 +62,9 @@ class KeypointDataset(Dataset):
             idx: Segment index
             
         Returns:
-            Tuple of (graphs, label, segment_id)
+            Tuple of (graphs, raw_keypoints, label, segment_id)
             - graphs: List of PyTorch Geometric Data objects for each frame
+            - raw_keypoints: Tensor of raw keypoints for transformer pathway
             - label: Segment label
             - segment_id: Segment ID
         """
@@ -81,19 +83,107 @@ class KeypointDataset(Dataset):
         object_locations = None
         if self.include_object and segment['object_locations'] is not None:
             object_locations = segment['object_locations']
+            
         # Get label
         label = segment['label']
 
-        # Determine which side is impaired based on video_id or another field
+        # Determine which side is impaired
         impaired_side = segment['impaired_hand']  # Default   
-        # Convert to graph representation
-        graphs = self._create_graphs(body_keypoints, hand_keypoints, object_locations, impaired_side)
+        
+        # Create raw keypoints tensor for transformer pathway
+        raw_keypoints = self._create_raw_keypoints(
+            body_keypoints, hand_keypoints, object_locations, impaired_side
+        )
+        
+        # Convert to graph representation for GNN pathway
+        graphs = self._create_graphs(
+            body_keypoints, hand_keypoints, object_locations, impaired_side
+        )
         
         # Apply transform if provided
         if self.transform:
             graphs = self.transform(graphs)
         
-        return graphs, label, segment_id
+        return graphs, raw_keypoints, label, segment_id
+    
+    def _create_raw_keypoints(self, body_keypoints, hand_keypoints, object_locations, impaired_side='right'):
+        """
+        Create raw keypoints tensor for transformer pathway
+        
+        Args:
+            body_keypoints: Body keypoints data
+            hand_keypoints: Hand keypoints data (optional)
+            object_locations: Object locations data (optional)
+            impaired_side: Which side is impaired ('right' or 'left')
+            
+        Returns:
+            Tensor of keypoints for transformer (seq_len, num_keypoints, feature_dim)
+        """
+        # Determine the number of frames
+        num_frames = min(body_keypoints.shape[2], self.seq_length)
+        
+        # Define key body joint indices (same as in _create_frame_graph)
+        if impaired_side == 'right':
+            body_key_indices = [1, 2, 3, 4, 8]  # Neck, RShoulder, RElbow, RWrist, MidHip
+        else:
+            body_key_indices = [1, 5, 6, 7, 8]  # Neck, LShoulder, LElbow, LWrist, MidHip
+        
+        # Hand keypoint indices (same as in _create_frame_graph)
+        hand_key_indices = [0, 4, 8, 12, 16, 20]  # Wrist and fingertips
+        
+        # Determine total number of keypoints
+        total_keypoints = len(body_key_indices)
+        if self.include_hand and hand_keypoints is not None:
+            total_keypoints += len(hand_key_indices)
+        if self.include_object and object_locations is not None:
+            # Assume one or more objects, check first frame
+            if isinstance(object_locations, np.ndarray) and object_locations.ndim == 3:
+                total_keypoints += object_locations.shape[0]
+            elif isinstance(object_locations, list) and len(object_locations) > 0:
+                total_keypoints += len(object_locations[0])
+        
+        # Initialize tensor for raw keypoints
+        # Shape: (seq_len, total_keypoints, 2) - where 2 is for x,y coordinates
+        raw_keypoints = torch.zeros((num_frames, total_keypoints, 2), dtype=torch.float)
+        
+        # Fill tensor with keypoints for each frame
+        for i in range(num_frames):
+            keypoint_idx = 0
+            
+            # Add body keypoints
+            if body_keypoints is not None and body_keypoints.size > 0:
+                body_frame = body_keypoints[body_key_indices, :, i]
+                raw_keypoints[i, keypoint_idx:keypoint_idx+len(body_key_indices), :] = torch.tensor(body_frame, dtype=torch.float)
+                keypoint_idx += len(body_key_indices)
+            
+            # Add hand keypoints
+            if hand_keypoints is not None and (isinstance(hand_keypoints, np.ndarray) and hand_keypoints.size > 0):
+                hand_frame = None
+                if isinstance(hand_keypoints, np.ndarray) and hand_keypoints.ndim == 3:
+                    if i < hand_keypoints.shape[2]:
+                        hand_frame = hand_keypoints[:, :, i]
+                elif isinstance(hand_keypoints, list) and i < len(hand_keypoints):
+                    hand_frame = np.array(hand_keypoints[i])
+                
+                if hand_frame is not None and hand_frame.shape[0] >= 21:
+                    key_hand_points = hand_frame[hand_key_indices]
+                    raw_keypoints[i, keypoint_idx:keypoint_idx+len(hand_key_indices), :] = torch.tensor(key_hand_points, dtype=torch.float)
+                    keypoint_idx += len(hand_key_indices)
+            
+            # Add object locations
+            if object_locations is not None and (isinstance(object_locations, np.ndarray) and object_locations.size > 0):
+                object_frame = None
+                if isinstance(object_locations, np.ndarray) and object_locations.ndim == 3:
+                    if i < object_locations.shape[2]:
+                        object_frame = object_locations[:, :, i]
+                elif isinstance(object_locations, list) and i < len(object_locations):
+                    object_frame = np.array(object_locations[i])
+                
+                if object_frame is not None:
+                    num_objects = object_frame.shape[0]
+                    raw_keypoints[i, keypoint_idx:keypoint_idx+num_objects, :] = torch.tensor(object_frame, dtype=torch.float)
+        
+        return raw_keypoints
     
     def _create_graphs(self, body_keypoints, hand_keypoints, object_locations, impaired_side='right'):
         """
@@ -264,6 +354,8 @@ class KeypointDataset(Dataset):
         
         # Create PyTorch Geometric Data object
         graph = Data(x=x, edge_index=edge_index)
+    
+        return graph
 
         
 
@@ -469,22 +561,18 @@ def load_data(segment_db_path, view_type, seq_length=20, batch_size=8,
     }
 
 
+# Example collate function for handling both graphs and raw keypoints
 def collate_fn(batch):
-    """
-    Custom collate function for batching graph data
+    graphs, raw_keypoints, labels, segment_ids = zip(*batch)
     
-    Args:
-        batch: List of (graphs, label, segment_id) tuples
-        
-    Returns:
-        Tuple of (graphs, labels, segment_ids, seq_lengths)
-    """
-    graphs, labels, segment_ids = zip(*batch)
-    
-    # Get sequence lengths
-    seq_lengths = [len(g) for g in graphs]
-    
-    # Convert labels to tensor
+    # Stack labels
     labels = torch.tensor(labels, dtype=torch.long)
     
-    return graphs, labels, segment_ids, seq_lengths
+    # Stack raw keypoints and add batch dimension
+    # Shape: (batch_size, seq_len, num_keypoints, 2)
+    raw_keypoints = torch.stack(raw_keypoints)
+    
+    # Get sequence lengths
+    seq_lengths = [len(graph_seq) for graph_seq in graphs]
+    
+    return graphs, raw_keypoints, labels, seq_lengths, segment_ids
