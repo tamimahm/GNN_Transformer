@@ -198,7 +198,7 @@ class PositionalEncoding(nn.Module):
 
 class GNNTransformerModel(nn.Module):
     """
-    Combined GNN + Transformer model for keypoint-based score generation
+    Combined GNN + Transformer model with separate spatial and temporal embeddings
     """
     
     def __init__(self, 
@@ -208,7 +208,8 @@ class GNNTransformerModel(nn.Module):
                  transformer_heads=4,
                  transformer_layers=4,
                  num_classes=2,
-                 dropout=0.2):
+                 dropout=0.2,
+                 max_num_keypoints=5):  # Added parameter for max keypoints
         """
         Initialize the GNN + Transformer model
         
@@ -220,6 +221,7 @@ class GNNTransformerModel(nn.Module):
             transformer_layers: Number of transformer layers
             num_classes: Number of output classes
             dropout: Dropout rate
+            max_num_keypoints: Maximum number of keypoints to consider
         """
         super(GNNTransformerModel, self).__init__()
         
@@ -231,6 +233,7 @@ class GNNTransformerModel(nn.Module):
         self.transformer_layers = transformer_layers
         self.num_classes = num_classes
         self.dropout = dropout
+        self.max_num_keypoints = max_num_keypoints
         
         # GNN encoder for spatial information
         self.gnn_encoder = GNNEncoder(
@@ -240,12 +243,39 @@ class GNNTransformerModel(nn.Module):
             dropout=dropout
         )
         
-        # Transformer encoder for temporal information
+        # Transformer encoder for processing GNN embeddings (original pathway)
         self.transformer_encoder = TransformerEncoder(
             input_dim=gnn_output_dim,
             num_heads=transformer_heads,
             num_layers=transformer_layers,
             dropout=dropout
+        )
+        
+        # === NEW COMPONENTS FOR DUAL PATHWAY ===
+        # Projection layer for raw keypoints
+        raw_keypoint_dim = max_num_keypoints * node_feature_dim
+        self.temporal_projection = nn.Sequential(
+            nn.Linear(raw_keypoint_dim, gnn_output_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # Separate transformer for temporal pathway
+        self.temporal_transformer = TransformerEncoder(
+            input_dim=gnn_output_dim,
+            num_heads=transformer_heads,
+            num_layers=transformer_layers,
+            dropout=dropout
+        )
+        
+        # Output projection for temporal pathway
+        self.temporal_output = nn.Linear(gnn_output_dim, gnn_output_dim)
+        
+        # Fusion layer to combine spatial and temporal embeddings
+        self.fusion_layer = nn.Sequential(
+            nn.Linear(gnn_output_dim * 2, gnn_output_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
         )
         
         # Classification head
@@ -256,14 +286,15 @@ class GNNTransformerModel(nn.Module):
             nn.Linear(gnn_output_dim // 2, num_classes)
         )
     
-    def forward(self, graphs, seq_lengths=None):
+    def forward(self, graphs, seq_lengths=None, raw_keypoints=None):
         """
-        Forward pass
+        Forward pass with dual pathways
         
         Args:
             graphs: List of PyTorch Geometric Data objects for each frame
-                   [batch_size, seq_len] where each element is a Data object
+                [batch_size, seq_len] where each element is a Data object
             seq_lengths: Sequence lengths for each batch (batch_size)
+            raw_keypoints: Raw keypoint sequences (batch_size, seq_len, num_keypoints, 2)
             
         Returns:
             Class logits (batch_size, num_classes)
@@ -277,117 +308,231 @@ class GNNTransformerModel(nn.Module):
             for i, length in enumerate(seq_lengths):
                 mask[i, :length] = 1
         else:
-            mask = None
+            mask = torch.ones(batch_size, max_seq_len, dtype=torch.bool, device=graphs[0][0].x.device)
         
-        # Process each frame with GNN encoder
-        gnn_embeddings = []
-        for t in range(max_seq_len):
-            # Collect graphs for this time step
-            frame_graphs = []
+        device = graphs[0][0].x.device
+        
+        # Check if we should use dual pathway or original approach
+        use_dual_pathway = raw_keypoints is not None
+        
+        if use_dual_pathway:
+            # === DUAL PATHWAY APPROACH ===
+            
+            # ===== SPATIAL PATHWAY (GNN) =====
+            # Process all graphs for all frames to get graph-level embedding
+            all_graphs = []
             for i in range(batch_size):
-                if t < len(graphs[i]):
-                    frame_graphs.append(graphs[i][t])
+                all_graphs.extend(graphs[i])
+            
+            # Combine all graphs into a single batch
+            all_batch = Batch.from_data_list(all_graphs)
+            
+            # Apply GNN encoder to all graphs at once
+            all_graph_embeddings = self.gnn_encoder(all_batch.x, all_batch.edge_index, all_batch.batch)
+            
+            # Split the embeddings back by sequence
+            offset = 0
+            graph_embeddings_by_seq = []
+            for i in range(batch_size):
+                seq_len = len(graphs[i])
+                seq_embeddings = all_graph_embeddings[offset:offset+seq_len]
+                
+                # Use only valid frames for pooling if seq_lengths provided
+                if seq_lengths is not None:
+                    valid_len = min(seq_lengths[i], seq_len)
+                    spatial_embedding = torch.mean(seq_embeddings[:valid_len], dim=0, keepdim=True)
                 else:
-                    # Padding with empty graph with same device
-                    device = graphs[i][0].x.device
-                    # Create a dummy single-node graph for padding
-                    dummy_graph = Data(
-                        x=torch.zeros(1, self.node_feature_dim, device=device),
-                        edge_index=torch.zeros(2, 0, dtype=torch.long, device=device)
-                    )
-                    frame_graphs.append(dummy_graph)
+                    spatial_embedding = torch.mean(seq_embeddings, dim=0, keepdim=True)
+                
+                graph_embeddings_by_seq.append(spatial_embedding)
+                offset += seq_len
             
-            # Combine graphs into a batch
-            batch = Batch.from_data_list(frame_graphs)
+            # Stack spatial embeddings
+            spatial_embedding = torch.cat(graph_embeddings_by_seq, dim=0)  # (batch_size, gnn_output_dim)
             
-            # Apply GNN encoder
-            embeddings = self.gnn_encoder(batch.x, batch.edge_index, batch.batch)
-            gnn_embeddings.append(embeddings)
-        
-        # Stack embeddings to form a sequence
-        gnn_embeddings = torch.stack(gnn_embeddings, dim=1)  # (batch_size, seq_len, gnn_output_dim)
-        
-        # Apply transformer encoder
-        transformer_output = self.transformer_encoder(gnn_embeddings, mask)
-        
-        # Global temporal pooling
-        if mask is not None:
-            # Masked mean pooling
-            mask_expanded = mask.unsqueeze(-1).expand_as(transformer_output)
-            sum_embeddings = torch.sum(transformer_output * mask_expanded, dim=1)
+            # ===== TEMPORAL PATHWAY (Transformer with raw keypoints) =====
+            # Reshape and ensure we don't exceed max keypoints
+            B, S, K, F = raw_keypoints.shape
+            # Take up to max_num_keypoints
+            K_used = min(K, self.max_num_keypoints)
+            
+            # Flatten keypoints for each frame
+            keypoints_used = raw_keypoints[:, :, :K_used, :]
+            temporal_input = keypoints_used.reshape(B, S, K_used * F)
+            
+            # Project to transformer dimension
+            temporal_input = self.temporal_projection(temporal_input)
+            
+            # Apply transformer
+            temporal_output = self.temporal_transformer(temporal_input, mask)
+            
+            # Global temporal pooling with mask
+            mask_expanded = mask.unsqueeze(-1).expand_as(temporal_output)
+            sum_temporal = torch.sum(temporal_output * mask_expanded, dim=1)
             sum_mask = torch.sum(mask_expanded, dim=1)
-            pooled_output = sum_embeddings / (sum_mask + 1e-10)
+            temporal_embedding = sum_temporal / (sum_mask + 1e-10)
+            
+            # Final projection
+            temporal_embedding = self.temporal_output(temporal_embedding)
+            
         else:
-            # Simple mean pooling
-            pooled_output = torch.mean(transformer_output, dim=1)
+            # === ORIGINAL APPROACH ===
+            # Process each frame with GNN encoder
+            gnn_embeddings = []
+            for t in range(max_seq_len):
+                frame_graphs = []
+                for i in range(batch_size):
+                    if t < len(graphs[i]):
+                        frame_graphs.append(graphs[i][t])
+                    else:
+                        device = graphs[i][0].x.device
+                        dummy_graph = Data(
+                            x=torch.zeros(1, self.node_feature_dim, device=device),
+                            edge_index=torch.zeros(2, 0, dtype=torch.long, device=device)
+                        )
+                        frame_graphs.append(dummy_graph)
+                
+                batch = Batch.from_data_list(frame_graphs)
+                embeddings = self.gnn_encoder(batch.x, batch.edge_index, batch.batch)
+                gnn_embeddings.append(embeddings)
+            
+            gnn_embeddings = torch.stack(gnn_embeddings, dim=1)  # (batch_size, seq_len, gnn_output_dim)
+            
+            # Extract spatial information by averaging across time (only valid frames)
+            mask_expanded = mask.unsqueeze(-1).expand_as(gnn_embeddings)
+            sum_spatial = torch.sum(gnn_embeddings * mask_expanded, dim=1)
+            sum_mask = torch.sum(mask_expanded, dim=1)
+            spatial_embedding = sum_spatial / (sum_mask + 1e-10)  # (batch_size, gnn_output_dim)
+            
+            # Apply transformer encoder to extract temporal information
+            transformer_output = self.transformer_encoder(gnn_embeddings, mask)  # (batch_size, seq_len, gnn_output_dim)
+            
+            # Extract temporal embedding with masked mean pooling
+            sum_temporal = torch.sum(transformer_output * mask_expanded, dim=1)
+            temporal_embedding = sum_temporal / (sum_mask + 1e-10)  # (batch_size, gnn_output_dim)
+        
+        # Combine spatial and temporal embeddings (same for both approaches)
+        combined_embedding = torch.cat([spatial_embedding, temporal_embedding], dim=1)  # (batch_size, gnn_output_dim*2)
+        
+        # Apply fusion layer
+        fused_embedding = self.fusion_layer(combined_embedding)  # (batch_size, gnn_output_dim)
         
         # Apply classification head
-        logits = self.classification_head(pooled_output)
+        logits = self.classification_head(fused_embedding)
         
         return logits
     
-    def get_attention_weights(self, graphs, seq_lengths=None):
+    def get_embeddings(self, graphs, seq_lengths=None, raw_keypoints=None):
         """
-        Get attention weights for visualization
+        Get spatial and temporal embeddings for analysis
         
         Args:
             graphs: List of PyTorch Geometric Data objects for each frame
             seq_lengths: Sequence lengths for each batch
+            raw_keypoints: Raw keypoint sequences (optional)
             
         Returns:
-            Attention weights from transformer layers
+            Tuple of (spatial_embedding, temporal_embedding, fused_embedding)
         """
-        batch_size = len(graphs)
-        max_seq_len = max(len(seq) for seq in graphs)
-        
-        # Create a mask for valid frames
-        if seq_lengths is not None:
-            mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool, device=graphs[0][0].x.device)
-            for i, length in enumerate(seq_lengths):
-                mask[i, :length] = 1
-        else:
-            mask = None
-        
-        # Process each frame with GNN encoder (same as forward)
-        gnn_embeddings = []
-        for t in range(max_seq_len):
-            frame_graphs = []
-            for i in range(batch_size):
-                if t < len(graphs[i]):
-                    frame_graphs.append(graphs[i][t])
-                else:
-                    device = graphs[i][0].x.device
-                    dummy_graph = Data(
-                        x=torch.zeros(1, self.node_feature_dim, device=device),
-                        edge_index=torch.zeros(2, 0, dtype=torch.long, device=device)
-                    )
-                    frame_graphs.append(dummy_graph)
+        # Create forward pass with no gradient tracking
+        with torch.no_grad():
+            batch_size = len(graphs)
+            max_seq_len = max(len(seq) for seq in graphs)
             
-            batch = Batch.from_data_list(frame_graphs)
-            embeddings = self.gnn_encoder(batch.x, batch.edge_index, batch.batch)
-            gnn_embeddings.append(embeddings)
-        
-        gnn_embeddings = torch.stack(gnn_embeddings, dim=1)
-        
-        # Add positional encoding
-        x = self.transformer_encoder.position_encoding(gnn_embeddings)
-        
-        # Get attention weights from each transformer layer
-        attention_weights = []
-        
-        # Access transformer layers
-        for layer in self.transformer_encoder.transformer.layers:
-            # Forward through self-attention
-            attn_output, attn_weights = layer.self_attn(x, x, x, attn_mask=None, key_padding_mask=~mask if mask is not None else None, need_weights=True)
-            attention_weights.append(attn_weights.detach())
+            # Create a mask for valid frames
+            if seq_lengths is not None:
+                mask = torch.zeros(batch_size, max_seq_len, dtype=torch.bool, device=graphs[0][0].x.device)
+                for i, length in enumerate(seq_lengths):
+                    mask[i, :length] = 1
+            else:
+                mask = torch.ones(batch_size, max_seq_len, dtype=torch.bool, device=graphs[0][0].x.device)
             
-            # Continue forward through the rest of the layer (similar to original implementation)
-            attn_output = layer.dropout1(attn_output)
-            x = x + attn_output
-            x = layer.norm1(x)
-            ff_output = layer.linear2(layer.dropout(layer.activation(layer.linear1(x))))
-            ff_output = layer.dropout2(ff_output)
-            x = x + ff_output
-            x = layer.norm2(x)
+            device = graphs[0][0].x.device
+            
+            # Check if we should use dual pathway or original approach
+            use_dual_pathway = raw_keypoints is not None
+            
+            if use_dual_pathway:
+                # === DUAL PATHWAY APPROACH ===
+                
+                # ===== SPATIAL PATHWAY (GNN) =====
+                all_graphs = []
+                for i in range(batch_size):
+                    all_graphs.extend(graphs[i])
+                
+                all_batch = Batch.from_data_list(all_graphs)
+                all_graph_embeddings = self.gnn_encoder(all_batch.x, all_batch.edge_index, all_batch.batch)
+                
+                offset = 0
+                graph_embeddings_by_seq = []
+                for i in range(batch_size):
+                    seq_len = len(graphs[i])
+                    seq_embeddings = all_graph_embeddings[offset:offset+seq_len]
+                    
+                    if seq_lengths is not None:
+                        valid_len = min(seq_lengths[i], seq_len)
+                        spatial_embedding = torch.mean(seq_embeddings[:valid_len], dim=0, keepdim=True)
+                    else:
+                        spatial_embedding = torch.mean(seq_embeddings, dim=0, keepdim=True)
+                    
+                    graph_embeddings_by_seq.append(spatial_embedding)
+                    offset += seq_len
+                
+                spatial_embedding = torch.cat(graph_embeddings_by_seq, dim=0)
+                
+                # ===== TEMPORAL PATHWAY (Transformer with raw keypoints) =====
+                B, S, K, F = raw_keypoints.shape
+                K_used = min(K, self.max_num_keypoints)
+                
+                keypoints_used = raw_keypoints[:, :, :K_used, :]
+                temporal_input = keypoints_used.reshape(B, S, K_used * F)
+                
+                temporal_input = self.temporal_projection(temporal_input)
+                temporal_output = self.temporal_transformer(temporal_input, mask)
+                
+                mask_expanded = mask.unsqueeze(-1).expand_as(temporal_output)
+                sum_temporal = torch.sum(temporal_output * mask_expanded, dim=1)
+                sum_mask = torch.sum(mask_expanded, dim=1)
+                temporal_embedding = sum_temporal / (sum_mask + 1e-10)
+                
+                temporal_embedding = self.temporal_output(temporal_embedding)
+                
+            else:
+                # === ORIGINAL APPROACH ===
+                # Same as before
+                gnn_embeddings = []
+                for t in range(max_seq_len):
+                    frame_graphs = []
+                    for i in range(batch_size):
+                        if t < len(graphs[i]):
+                            frame_graphs.append(graphs[i][t])
+                        else:
+                            device = graphs[i][0].x.device
+                            dummy_graph = Data(
+                                x=torch.zeros(1, self.node_feature_dim, device=device),
+                                edge_index=torch.zeros(2, 0, dtype=torch.long, device=device)
+                            )
+                            frame_graphs.append(dummy_graph)
+                    
+                    batch = Batch.from_data_list(frame_graphs)
+                    embeddings = self.gnn_encoder(batch.x, batch.edge_index, batch.batch)
+                    gnn_embeddings.append(embeddings)
+                
+                gnn_embeddings = torch.stack(gnn_embeddings, dim=1)
+                
+                # Extract spatial embedding
+                mask_expanded = mask.unsqueeze(-1).expand_as(gnn_embeddings)
+                sum_spatial = torch.sum(gnn_embeddings * mask_expanded, dim=1)
+                sum_mask = torch.sum(mask_expanded, dim=1)
+                spatial_embedding = sum_spatial / (sum_mask + 1e-10)
+                
+                # Extract temporal embedding
+                transformer_output = self.transformer_encoder(gnn_embeddings, mask)
+                sum_temporal = torch.sum(transformer_output * mask_expanded, dim=1)
+                temporal_embedding = sum_temporal / (sum_mask + 1e-10)
+            
+            # Combine embeddings
+            combined_embedding = torch.cat([spatial_embedding, temporal_embedding], dim=1)
+            fused_embedding = self.fusion_layer(combined_embedding)
         
-        return attention_weights
+        return spatial_embedding, temporal_embedding, fused_embedding
