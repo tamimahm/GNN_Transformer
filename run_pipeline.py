@@ -52,7 +52,7 @@ def run_pipeline(mode='process_and_train'):
         'visualize_random_seed': 1206177,                  # Random seed for visualization sampling
         
         # Camera/view configuration
-        'view_type': 'ipsi',                          # Main view type to use ('top' or 'ipsi')
+        'view_type': 'top',                          # Main view type to use ('top' or 'ipsi')
         
         # Model parameters
         'model_output_dir': './output/gnn_transformer',
@@ -71,7 +71,7 @@ def run_pipeline(mode='process_and_train'):
         'cross_val_folds': 5,
         'include_hand':False,
         'include_object':False,
-        'num_workers': multiprocessing.cpu_count(),  # Use all available cores
+        'num_workers': 0,  # Use all available cores
     }
     
     # Track execution time
@@ -84,9 +84,12 @@ def run_pipeline(mode='process_and_train'):
     os.makedirs(config['model_output_dir'], exist_ok=True)
 
     # Update database filenames to include timestamp
-    config['train_db_filename'] = f"train_segment_database.pkl"
-    config['inference_db_filename'] = f"inference_segment_database.pkl"
-    
+    if config['view_type'] == 'ipsi':
+        config['train_db_filename'] = f"train_segment_database_ipsi.pkl"
+        config['inference_db_filename'] = f"inference_segment_database_ispi.pkl"
+    if config['view_type'] == 'top':
+        config['train_db_filename'] = f"train_segment_database_top.pkl"
+        config['inference_db_filename'] = f"inference_segment_database_top.pkl"    
     # Create output directories
     os.makedirs(config['output_dir'], exist_ok=True)
     os.makedirs(config['model_output_dir'], exist_ok=True)
@@ -246,7 +249,7 @@ def run_pipeline(mode='process_and_train'):
 
 if __name__ == "__main__":
     # Parse command line argument
-    mode = 'process_and_train'  # Default mode - now includes visualization step
+    mode = 'process_only'  # Default mode - now includes visualization step
     
     if len(sys.argv) > 1:
         mode = sys.argv[1]
