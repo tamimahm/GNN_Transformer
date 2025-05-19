@@ -183,7 +183,7 @@ def build_segment_database(records, keypoints_data, data_type,fps=30, num_target
         else:
             view_type='contra'
             continue  
-        if data_type=='object':
+        if data_type=='object': 
             # Skip if no keypoints data for this patient/activity
             if (patient_id not in keypoints_data or 
                 activity_id not in keypoints_data[patient_id][view_type]):
@@ -203,20 +203,23 @@ def build_segment_database(records, keypoints_data, data_type,fps=30, num_target
                     continue
                 # Get keypoints for this view
                 view_keypoints = patient_keypoints[view_type]
-        
+        #view_keypoints=np.where(view_keypoints == 0, np.nan, view_keypoints)
+        normalized_frames = normalize_keypoints(view_keypoints)
         # Process each segment
         for seg_index, seg in enumerate(record['segments']):
             start_time, end_time = seg
             
             # Extract segment frames
             try:
-                segment_frames = extract_segment_frames(
-                    view_keypoints, fps, start_time, end_time, num_target_frames
-                )
-                
                 # Normalize keypoints
-                normalized_frames = normalize_keypoints(segment_frames)
                 
+                segment_frames = extract_segment_frames(
+                    normalized_frames, fps, start_time, end_time, num_target_frames
+                )
+                if segment_frames==[] and start_time==end_time:
+                    segment_frames=None
+
+                #segment_frames=np.where(segment_frames == 0, np.nan, segment_frames)
                 # Create segment
                 segments[segment_id] = {
                     'patient_id': patient_id,
@@ -226,7 +229,7 @@ def build_segment_database(records, keypoints_data, data_type,fps=30, num_target
                     'view_type': view_type,
                     'start_time': start_time,
                     'end_time': end_time,
-                    'keypoints': normalized_frames,
+                    'keypoints': segment_frames,
                     'impaired_hand': hand_id
                 }
                 
