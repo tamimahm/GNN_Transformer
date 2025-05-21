@@ -6,8 +6,8 @@ import logging
 import multiprocessing
 # Import our modules
 from multi_pickle_processor_updated import MultiPickleProcessor
-from main_script import train_model, test, cross_validate
-from graph_visualization import visualize_segment_graphs
+# from main_script import train_model, test, cross_validate
+# from graph_visualization import visualize_segment_graphs
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
@@ -52,7 +52,7 @@ def run_pipeline(mode='process_and_train'):
         'visualize_random_seed': 1206177,                  # Random seed for visualization sampling
         
         # Camera/view configuration
-        'view_type': 'top',                          # Main view type to use ('top' or 'ipsi')
+        'view_type': 'ipsi',                          # Main view type to use ('top' or 'ipsi')
         
         # Model parameters
         'model_output_dir': './output/gnn_transformer',
@@ -86,7 +86,7 @@ def run_pipeline(mode='process_and_train'):
     # Update database filenames to include timestamp
     if config['view_type'] == 'ipsi':
         config['train_db_filename'] = f"train_segment_database_ipsi.pkl"
-        config['inference_db_filename'] = f"inference_segment_database_ispi.pkl"
+        config['inference_db_filename'] = f"inference_segment_database_ipsi.pkl"
     if config['view_type'] == 'top':
         config['train_db_filename'] = f"train_segment_database_top.pkl"
         config['inference_db_filename'] = f"inference_segment_database_top.pkl"    
