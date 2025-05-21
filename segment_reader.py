@@ -99,8 +99,8 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
                     # Determine if this is the appropriate camera view
                     if view_type == 'top' and segment_camera_id != 'cam3':
                         continue
-                    elif view_type == 'ipsi' and segment_camera_id == 'cam1':
-                        continue
+                    # elif view_type == 'ipsi' and segment_camera_id == 'cam1':
+                    #     continue
                     
                     # For ipsilateral view, check if this camera is the ipsilateral camera for the patient
                     if view_type == 'ipsi':
