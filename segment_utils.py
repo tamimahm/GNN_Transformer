@@ -43,8 +43,11 @@ def load_video_segments_info(csv_dir):
         # Split filename to extract patient id and activity id.
         # Expected filename format: ARAT_01_right_Impaired_cam1_activity11.mp4
         parts = file_name.split("_")
+
         if len(parts) < 5:
             logger.warning(f"Filename {file_name} does not match expected format. Skipping.")
+            continue
+        if parts[3]=='Unimpaired':
             continue
         # Assume patient id is the numeric part from the second token, e.g., "01" from "ARAT_01"
         patient_id = int(parts[1].strip())
