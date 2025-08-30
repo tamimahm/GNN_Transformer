@@ -73,6 +73,17 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
     # Statistics counters
     r2_count = 0  # Ratings of 2 (maps to label 0)
     r3_count = 0  # Ratings of 3 (maps to label 1)
+    from collections import defaultdict, Counter
+    counts = defaultdict(Counter)
+
+    rater_keys=('t1', 't2')
+    rating_values=(None, 0, 1, 2, 3)
+
+
+    counts_task = {th: {val: 0 for val in rating_values} for th in rater_keys}
+
+    seen = set()                       # remembers (patient, task, therapist)
+
     no_match_count = 0
     
     # Collect valid segments for training/validation and inference
@@ -95,7 +106,7 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
                     # Extract patient_id and camera_id from segment
                     patient_id = segment['patient_id']
                     segment_camera_id = segment['CameraId']
-                    
+                    activity_id=segment['activity_id']
                     # Determine if this is the appropriate camera view
                     if view_type == 'top' and segment_camera_id != 'cam3':
                         continue
@@ -107,15 +118,33 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
                         ipsilateral_camera = patient_to_ipsilateral.get(patient_id)
                         if ipsilateral_camera != segment_camera_id:
                             continue
-                    
+                    tr   = segment.get('task_ratings', {})
+                    for th in rater_keys:
+                        key = (patient_id, activity_id, th)
+                        if key in seen:            # already processed this task for that therapist
+                            continue
+                        seen.add(key)
+
+                        rating = tr.get(th)        # might be None
+                        counts_task[th][rating] += 1
                     # Check for valid rating
                     if 'segment_ratings' not in segment:
                         continue
+                    # pass 1: accumulate observed ratings
+
+                    ratings = segment.get('segment_ratings', {})
+                    for key in rater_keys:
+                        counts[key][ratings.get(key)] += 1  # None if missing
+
+                    # pass 2: ensure every therapist has all rating buckets
+                    for key in rater_keys:
+                        for val in rating_values:
+                            counts[key].setdefault(val, 0)
                     
                     # Extract individual ratings for inference segments
                     t1_rating = segment['segment_ratings'].get('t1')
                     t2_rating = segment['segment_ratings'].get('t2')
-                    
+
                     # Convert individual ratings to binary labels for inference segments
                     t1_label = None if t1_rating is None else (0 if t1_rating == 2 else 1)
                     t2_label = None if t2_rating is None else (0 if t2_rating == 2 else 1)
