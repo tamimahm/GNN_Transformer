@@ -35,6 +35,9 @@ def load_video_segments_info(csv_dir):
     grouped = merged_df.groupby(['FileName', 'PatientTaskHandmappingId', 'CameraId'])
     
     records = []
+    unimp=0
+    skipped=0
+    len_parts=0
     # Define activities to skip
     skip_activities = {"7", "17", "18", "19"}
     for (file_name, mapping_id, camera_id), group in grouped:
@@ -46,8 +49,10 @@ def load_video_segments_info(csv_dir):
 
         if len(parts) < 5:
             logger.warning(f"Filename {file_name} does not match expected format. Skipping.")
+            len_parts+=1
             continue
         if parts[3]=='Unimpaired':
+            unimp+=1
             continue
         # Assume patient id is the numeric part from the second token, e.g., "01" from "ARAT_01"
         patient_id = int(parts[1].strip())
@@ -56,6 +61,7 @@ def load_video_segments_info(csv_dir):
         activity_id = activity_part.split('.')[0].replace("activity", "").strip()
         # Skip specified activities
         if activity_id in skip_activities:
+            skipped+=1
             continue        
         record = {
             "FileName": file_name,
