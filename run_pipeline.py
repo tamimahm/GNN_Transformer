@@ -34,13 +34,14 @@ def run_pipeline(mode='process_and_train'):
     config = {
         # Data paths
         'pickle_dirs': {
-            'pickle_dir': 'D:/pickle_dir',            # Directory with segment files and therapist labels
+            'pickle_dir': 'D:/nature_everything/nature_dataset',            # Directory with segment files and therapist labels
             'openpose': 'D:/pickle_files',            # Directory with body keypoint data
             'hand': 'D:/pickle_files_hand',           # Directory with hand keypoint data
             'object': 'D:/pickle_files_object'        # Directory with object location data
         },
-        'ipsi_contra_csv': 'D:/Github/Multi_view-automatic-assessment/camera_assignments.csv',   # CSV mapping patient IDs to camera IDs
-        'output_dir': 'D:/Github/GNN_Transformer/combined_segments',         # Output directory for segment database
+        'csv_dir': 'D:/nature_everything',
+        'ipsi_contra_csv': 'D:/nature_everything/camera_assignments.csv',   # CSV mapping patient IDs to camera IDs
+        'output_dir': 'D:/nature_everything/combined_segments',         # Output directory for segment database
         'train_db_filename': 'train_segment_database.pkl',  # Output filename for training database
         'inference_db_filename': 'inference_segment_database.pkl',  # Output filename for inference database
         
