@@ -4,7 +4,7 @@ import glob
 import pandas as pd
 import logging
 from tqdm import tqdm
-
+from copy import deepcopy
 # Set up logging
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -71,8 +71,10 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
     logger.info(f"Found {len(pickle_files)} pickle files to process.")
     
     # Statistics counters
+    r1_count=0
     r2_count = 0  # Ratings of 2 (maps to label 0)
     r3_count = 0  # Ratings of 3 (maps to label 1)
+    r0_count=0
     from collections import defaultdict, Counter
     counts = defaultdict(Counter)
 
@@ -101,7 +103,7 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
         
         # Process segments for each camera
         for camera_id in data:
-            for segments_group in data[camera_id]:
+            for segments_group in data[camera_id]:                
                 for segment in segments_group:
                     # Extract patient_id and camera_id from segment
                     patient_id = segment['patient_id']
@@ -146,8 +148,9 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
                     t2_rating = segment['segment_ratings'].get('t2')
 
                     # Convert individual ratings to binary labels for inference segments
-                    t1_label = None if t1_rating is None else (0 if t1_rating == 2 else 1)
-                    t2_label = None if t2_rating is None else (0 if t2_rating == 2 else 1)
+                    t1_label = None if t1_rating is None else t1_rating 
+                    t2_label = None if t2_rating is None else t2_rating 
+
                     
                     # Create video ID for the segment
                     video_id = (f"patient_{segment['patient_id']}_task_{segment['activity_id']}_"
@@ -173,9 +176,27 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
                     
                     # For training segments, we need a consensus label
                     rating = get_valid_rating(segment)
-                    
-                    # Skip segments with no rating or rating not in [2, 3]
-                    if rating is None or (rating != "no_match" and rating not in [2, 3]):
+
+                    if rating == 0 and len(segments_group) < 4:
+                        seg_id = segment["segment_id"]  # current segment's id (0/1/2/3)
+
+                        # decide which new ids to create
+                        if seg_id == 0:
+                            new_ids = [1, 2, 3]
+                        elif seg_id == 1:
+                            new_ids = [2, 3]
+                        elif seg_id == 2:
+                            new_ids = [3]
+                        else:
+                            new_ids = []
+
+                        # duplicate the segment for each target id, changing only 'segment_id'
+                        for nid in new_ids:
+                            seg_copy = deepcopy(segment)
+                            seg_copy["segment_id"] = nid
+                            segments_group.append(seg_copy)
+
+                    if rating is None or (rating != "no_match" and rating not in [0,1,2, 3]):
                         continue
                     
                     # Handle matching ratings
@@ -186,14 +207,19 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
                     # Convert rating to label
                     try:
                         rating = int(rating)
-                        
                         # Map according to specified scheme: 2->0, 3->1
                         if rating == 2:
-                            label = 0
+                            label = rating
                             r2_count += 1
-                        else:  # rating == 3
-                            label = 1
+                        elif rating == 3:  # rating == 3
+                            label = rating
                             r3_count += 1
+                        elif rating == 1:
+                            label = rating
+                            r1_count += 1
+                        else:
+                            label = rating
+                            r0_count += 1
                     except (ValueError, TypeError):
                         logger.warning(f"Skipping segment in {pkl_file} with invalid rating: {rating}")
                         continue
@@ -213,8 +239,10 @@ def read_segment_information(pickle_dir,view_type, ipsi_contra_csv=None ):
     
     # Log statistics
     logger.info(f"Read {len(train_segments)} segments with valid therapist ratings for training")
-    logger.info(f"  Class 0 (rating 2): {r2_count} segments")
-    logger.info(f"  Class 1 (rating 3): {r3_count} segments")
+    logger.info(f"  Class 0 (rating 0): {r0_count} segments")
+    logger.info(f"  Class 1 (rating 1): {r1_count} segments")
+    logger.info(f"  Class 2(rating 2): {r2_count} segments")
+    logger.info(f"  Class 3 (rating 3): {r3_count} segments")
     logger.info(f"  No match: {no_match_count} segments")
     logger.info(f"Read {len(inference_segments)} segments for inference")
     
