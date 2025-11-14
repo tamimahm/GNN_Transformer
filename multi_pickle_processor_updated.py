@@ -21,14 +21,14 @@ class MultiPickleProcessor:
     
     def __init__(self, 
                 pickle_dirs={
-                    'pickle_dir': 'D:/pickle_dir',          # Segment files with therapist labels
+                    'pickle_dir': 'D:/nature_everything/nature_dataset',          # Segment files with therapist labels
                     'openpose': 'D:/pickle_files',          # OpenPose body keypoint data
                     'hand': 'D:/pickle_files_hand',         # Hand keypoints from MediaPipe
                     'object': 'D:/pickle_files_object'      # Object locations from TridentNet
                 },
-                csv_dir='D:/files_database',                     # Directory with segment timing CSVs
-                output_dir='D:/Github/GNN_Transformer/combined_segments',
-                ipsi_contra_csv='D:/camera_mapping.csv',
+                csv_dir='D:/nature_everything',                     # Directory with segment timing CSVs
+                output_dir='D:/nature_everything/combined_segments',
+                ipsi_contra_csv='D:/nature_everything/camera_assignments.csv',
                 num_files_per_dir=10,
                 fps=30,
                 view_type='top'):
