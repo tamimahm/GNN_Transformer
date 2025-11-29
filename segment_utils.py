@@ -217,7 +217,13 @@ def build_segment_database(records, keypoints_data, data_type,fps=30, num_target
         # Process each segment
         for seg_index, seg in enumerate(record['segments']):
             start_time, end_time = seg
-            
+            if start_time == end_time:
+                if seg_index==0:
+                    start_time=0
+                else:
+                    start_time=record['segments'][seg_index-1][0]
+                seg=(start_time,end_time)
+                record['segments'][seg_index]=seg           
             # Extract segment frames
             try:
                 # Normalize keypoints
