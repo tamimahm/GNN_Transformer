@@ -443,8 +443,7 @@ class MultiPickleProcessor:
         
         logger.info(f"Built {len(self.inference_segment_data)} inference segments with t1/t2 labels")
     
-    def save_segment_databases(self, train_filename='train_segment_database.pkl', 
-                              inference_filename='inference_segment_database.pkl'):
+    def save_segment_databases(self):
         """
         Save the segment databases
         
@@ -453,6 +452,13 @@ class MultiPickleProcessor:
             inference_filename: Filename for inference segment database
         """
         # Save training segment database
+        if self.view_type == 'top':
+            train_filename = 'train_segment_database_top.pkl'
+            inference_filename = 'inference_segment_database_top.pkl'
+        else:
+            train_filename = 'train_segment_database_ipsi.pkl'
+            inference_filename = 'inference_segment_database_ipsi.pkl'
+
         train_output_path = os.path.join(self.output_dir, train_filename)
         logger.info(f"Saving training segment database to {train_output_path}...")
         
