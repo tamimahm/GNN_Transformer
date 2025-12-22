@@ -2078,17 +2078,29 @@ if __name__ == "__main__":
     delta_H_mqe_to_seg  = H_task_mqe - H_task_seg_mqe
 
     fig, ax = plt.subplots(figsize=(3.6, 2.8))
-    ax.hist(delta_H_task_to_mqe, bins=30, alpha=0.7,
-            label=r"$\Delta H$ (task-only $\rightarrow$ task+MQE)",
-            color=cb_blue, edgecolor="black", linewidth=0.3)
-    ax.hist(delta_H_mqe_to_seg,  bins=30, alpha=0.7,
-            label=r"$\Delta H$ (task+MQE $\rightarrow$ task+seg+MQE)",
-            color=cb_orange, edgecolor="black", linewidth=0.3)
+    ax.hist(
+        delta_H_task_to_mqe,
+        bins=30,
+        alpha=0.7,
+        label=r"$\Delta H$ (task-only $\rightarrow$ task+MQE)",
+        color=cb_blue,
+        edgecolor="black",
+        linewidth=0.3,
+    )
+    ax.hist(
+        delta_H_mqe_to_seg,
+        bins=30,
+        alpha=0.7,
+        label=r"$\Delta H$ (task+MQE $\rightarrow$ task+seg+MQE)",
+        color=cb_orange,
+        edgecolor="black",
+        linewidth=0.3,
+    )
+    ax.legend(frameon=False, loc='best',fontsize=5)
     ax.axvline(0.0, color=cb_gray, linestyle="--", linewidth=1.0)
     ax.set_xlabel(r"Entropy change $\Delta H$")
     ax.set_ylabel("Number of tasks")
     ax.set_title("Entropy reduction per task")
-    ax.legend(frameon=False)
     ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
     fig.tight_layout()
     fig.savefig(fig_dir / "deltaH_taskonly_to_mqe_and_mqe_to_seg_mqe.png", dpi=300, bbox_inches='tight')
@@ -2282,7 +2294,7 @@ if __name__ == "__main__":
         delta_H_task_to_full,
         bins=30,
         alpha=0.7,
-        label=r"$\Delta H$ (task-only $\rightarrow$ full $T\rightarrow S\rightarrow\mathrm{MQE}$)",
+        label=r"$\Delta H$ (task-only $\rightarrow$ task+MQE)",
         color=cb_blue,
         edgecolor="black",
         linewidth=0.3,
@@ -2291,16 +2303,16 @@ if __name__ == "__main__":
         delta_H_flat_to_full,
         bins=30,
         alpha=0.7,
-        label=r"$\Delta H$ (task+seg+MQE $\rightarrow$ full $T\rightarrow S\rightarrow\mathrm{MQE}$)",
+        label=r"$\Delta H$ (task+MQE $\rightarrow$ task+seg+MQE)",
         color=cb_orange,
         edgecolor="black",
         linewidth=0.3,
     )
+    ax.legend(frameon=False, loc='best')
     ax.axvline(0.0, color=cb_gray, linestyle="--", linewidth=1.0)
     ax.set_xlabel(r"Entropy change $\Delta H$")
     ax.set_ylabel("Number of tasks")
     ax.set_title("Entropy reduction per task (full hierarchy)")
-    ax.legend(frameon=False)
     ax.grid(axis="y", linestyle=":", linewidth=0.5, alpha=0.6)
     fig.tight_layout()
     fig.savefig(
