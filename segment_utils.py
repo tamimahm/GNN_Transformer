@@ -107,27 +107,28 @@ def extract_segment_frames(keypoints_array, fps, start_time, end_time, num_targe
     # Extract frames for the segment
     segment_frames = keypoints_array[:, :, start_frame:end_frame]
     
-    # Determine number of frames in the segment
-    num_segment_frames = segment_frames.shape[2]
+    # # Determine number of frames in the segment
+    # num_segment_frames = segment_frames.shape[2]
     
-    # If we have fewer frames than needed, duplicate the last frame
-    if num_segment_frames < num_target_frames:
-        last_frame = segment_frames[:, :, -1]
-        padding_needed = num_target_frames - num_segment_frames
-        padding = np.repeat(last_frame[:, :, np.newaxis], padding_needed, axis=2)
-        segment_frames = np.concatenate([segment_frames, padding], axis=2)
-        num_segment_frames = num_target_frames
+    # # If we have fewer frames than needed, duplicate the last frame
+    # if num_segment_frames < num_target_frames:
+    #     last_frame = segment_frames[:, :, -1]
+    #     padding_needed = num_target_frames - num_segment_frames
+    #     padding = np.repeat(last_frame[:, :, np.newaxis], padding_needed, axis=2)
+    #     segment_frames = np.concatenate([segment_frames, padding], axis=2)
+    #     num_segment_frames = num_target_frames
     
-    # Get evenly spaced indices
-    if num_segment_frames == num_target_frames:
-        frame_indices = list(range(num_segment_frames))
-    else:
-        frame_indices = np.linspace(0, num_segment_frames - 1, num_target_frames, dtype=int)
+    # # Get evenly spaced indices
+    # if num_segment_frames == num_target_frames:
+    #     frame_indices = list(range(num_segment_frames))
+    # else:
+    #     frame_indices = np.linspace(0, num_segment_frames - 1, num_target_frames, dtype=int)
     
-    # Extract the target frames
-    target_frames = segment_frames[:, :, frame_indices].copy()
+    # # Extract the target frames
+    # target_frames = segment_frames[:, :, frame_indices].copy()
     
-    return target_frames
+    # return target_frames
+    return segment_frames
 
 def normalize_keypoints(keypoints, image_width=1920, image_height=1080):
     """
