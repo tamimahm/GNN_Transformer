@@ -54,7 +54,7 @@ def run_pipeline(mode='process_and_train'):
         'visualize_random_seed': 1206177,                  # Random seed for visualization sampling
         
         # Camera/view configuration
-        'view_type': 'top',                          # Main view type to use ('top' or 'ipsi')
+        'view_type': 'ipsi',                          # Main view type to use ('top' or 'ipsi')
         
         # Model parameters
         'model_output_dir': './output/gnn_transformer',
@@ -121,121 +121,7 @@ def run_pipeline(mode='process_and_train'):
         inference_db_path = db_paths['inference_task_db_path']
         
         process_time = time.time() - start_time
-        logger.info(f"\nProcessing completed in {process_time:.2f} seconds")
-    
-    # Visualize graphs if needed
-    if mode in ['visualize_only', 'process_visualize_train']:
-        logger.info("\n" + "="*80)
-        logger.info("STEP 2: Visualizing keypoint graphs")
-        logger.info("="*80)
-        
-        vis_start_time = time.time()
-        
-        # Visualize training tasks
-        vis_dir_train = visualize_task_graphs(
-            task_db_path=train_db_path,
-            output_dir=os.path.join(config['model_output_dir'], 'train_visualizations'),
-            view_type=config['view_type'],
-            num_samples=config['visualize_num_samples'],
-            random_seed=config['visualize_random_seed']
-        )
-        
-        logger.info(f"Training graph visualizations saved to {vis_dir_train}")
-        
-        # Visualize inference tasks
-        if os.path.exists(inference_db_path):
-            vis_dir_inference = visualize_task_graphs(
-                task_db_path=inference_db_path,
-                output_dir=os.path.join(config['model_output_dir'], 'inference_visualizations'),
-                view_type=config['view_type'],
-                num_samples=config['visualize_num_samples'],
-                random_seed=config['visualize_random_seed']
-            )
-            
-            logger.info(f"Inference graph visualizations saved to {vis_dir_inference}")
-        
-        vis_time = time.time() - vis_start_time
-        logger.info(f"\nVisualization completed in {vis_time:.2f} seconds")
-    
-    # Train model if needed
-    if mode in ['train_only', 'process_and_train', 'process_visualize_train']:
-        step_num = 2 if mode != 'process_visualize_train' else 3
-        logger.info("\n" + "="*80)
-        logger.info(f"STEP {step_num}: Training GNN + Transformer model")
-        logger.info("="*80)
-        
-        train_start_time = time.time()
-
-        train_model(
-            task_db_path=train_db_path,  # Use training task database
-            output_dir=config['model_output_dir'],
-            view_type=config['view_type'],
-            epochs=config['epochs'],
-            batch_size=config['batch_size'],
-            lr=config['lr'],
-            weight_decay=config['weight_decay'],
-            seq_length=config['seq_length'],
-            gnn_hidden=config['gnn_hidden'],
-            gnn_out=config['gnn_out'],
-            transformer_heads=config['transformer_heads'],
-            transformer_layers=config['transformer_layers'],
-            dropout=config['dropout'],
-            seed=config['seed'],
-            balance_classes=config['balance_classes'],
-            include_hand=config['include_hand'], 
-            include_object=config['include_object'],
-            num_workers=config['num_workers']  # Add this parameter
-        )
-        
-        train_time = time.time() - train_start_time
-        logger.info(f"\nTraining completed in {train_time:.2f} seconds")
-    
-    # Run cross-validation if needed
-    if mode == 'cross_validate':
-        logger.info("\n" + "="*80)
-        logger.info(f"STEP 2: Running {config['cross_val_folds']}-fold cross-validation")
-        logger.info("="*80)
-        
-        cv_start_time = time.time()
-        
-        cross_validate(
-            task_db_path=train_db_path,  # Use training task database
-            view_type=config['view_type'],
-            output_dir=config['model_output_dir'],
-            num_folds=config['cross_val_folds'],
-            epochs=config['epochs'],
-            batch_size=config['batch_size'],
-            lr=config['lr'],
-            weight_decay=config['weight_decay'],
-            seq_length=config['seq_length'],
-            gnn_hidden=config['gnn_hidden'],
-            gnn_out=config['gnn_out'],
-            transformer_heads=config['transformer_heads'],
-            transformer_layers=config['transformer_layers'],
-            dropout=config['dropout'],
-            seed=config['seed'],
-            balance_classes=config['balance_classes']
-        )
-        
-        cv_time = time.time() - cv_start_time
-        logger.info(f"\nCross-validation completed in {cv_time:.2f} seconds")
-    
-    # Run inference if needed
-    if mode == 'inference':
-        logger.info("\n" + "="*80)
-        logger.info("STEP 2: Running inference with pre-trained model")
-        logger.info("="*80)
-        
-        inference_start_time = time.time()
-        
-        # Note: You would need to implement an inference function that can handle
-        # the inference task database with t1_label and t2_label
-        # This is a placeholder for now
-        logger.info("Inference functionality to be implemented")
-        
-        inference_time = time.time() - inference_start_time
-        logger.info(f"\nInference completed in {inference_time:.2f} seconds")
-    
+        logger.info(f"\nProcessing completed in {process_time:.2f} seconds")    
     # Print total execution time
     total_time = time.time() - start_time
     logger.info("\n" + "="*80)
