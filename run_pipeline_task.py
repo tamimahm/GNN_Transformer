@@ -5,7 +5,7 @@ from datetime import datetime
 import logging
 import multiprocessing
 # Import our modules
-from multi_pickle_processor_updated import MultiPickleProcessor
+from multi_pickle_processor_task import MultiPickleTaskProcessor
 # from main_script import train_model, test, cross_validate
 # from graph_visualization import visualize_task_graphs
 
@@ -41,6 +41,7 @@ def run_pipeline(mode='process_and_train'):
         },
         'csv_dir': 'D:/nature_everything',
         'ipsi_contra_csv': 'D:/nature_everything/camera_assignments.csv',   # CSV mapping patient IDs to camera IDs
+        'live_rating_csv': 'D:/nature_everything/live_rating_cleaned.csv', # CSV with clinician live ratings per activity
         'output_dir': 'D:/nature_everything/combined_tasks',         # Output directory for task database
         'train_db_filename': 'train_task_database.pkl',  # Output filename for training database
         'inference_db_filename': 'inference_task_database.pkl',  # Output filename for inference database
@@ -105,12 +106,13 @@ def run_pipeline(mode='process_and_train'):
         logger.info("STEP 1: Processing task data and extracting keypoints")
         logger.info("="*80)
         
-        processor = MultiPickleProcessor(
+        processor = MultiPickleTaskProcessor(
             pickle_dirs=config['pickle_dirs'],
             output_dir=config['output_dir'],
             ipsi_contra_csv=config['ipsi_contra_csv'],
+            live_rating_csv=config['live_rating_csv'],
             fps=config['fps'],
-            view_type=config['view_type']  # Add this parameter
+            view_type=config['view_type']
         )
         
         # Process data and build task databases
